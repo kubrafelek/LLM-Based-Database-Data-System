@@ -1,59 +1,57 @@
 # TASK.md: Progress Tracker
 
-This file tracks the case study's progress and is **updated after every development step**.
-Requirements come from the Technical Specification in [Appendix A](#appendix-a--technical-specification) and the original `case_study.pdf`.
+Technical progress of the case study: implementation status, decisions, technical changes and test cases.
+Requirements come from the Technical Specification in [Appendix A](#appendix-a-technical-specification) and the original `case_study.pdf`.
 
-Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not started · ❓ Needs a decision
+Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not started
 
 ---
 
 ## 1. Current Status
 
 **Last updated:** 2026-11-05
-**Current phase:** Python implementation complete with a web UI and checksum fusion, verified with a real LLM (Run 4: 29/29). Next: the Java migration (Phase 11).
+**Current phase:** Python implementation (Task 1) complete, with checksum fusion and a web UI; verified with a real LLM (29/29). Next: Java migration (Task 2).
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 1 | Requirement analysis & architecture | ✅ | Spec §10 layers: `api/routes`, `core`, `domain`, `services`, `repositories`, `infrastructure/{database,llm}` |
-| 2 | Repository & environment setup | ✅ | Docker, compose, `.env.example` (spec §12 names), `.gitignore`; git repo on `main`, pushed to `https://github.com/kubrafelek/LLM-Based-Database-Data-D-scovery-System` |
-| 3 | Database schema design | ✅ | `users`; `db_connections` 1─N `db_metadata` 1─N `db_tables` 1─N `db_columns`; FKs + indexes; migration `0002` with data migration (tested) |
+| 2 | Repository & environment setup | ✅ | Docker, compose, `.env.example` (spec §12 names), `.gitignore` |
+| 3 | Database schema design | ✅ | `users`; `db_connections` 1─N `db_metadata` 1─N `db_tables` 1─N `db_columns`; FKs + indexes; migrations `0001`, `0002` |
 | 4 | Authentication | ✅ | `POST /api/v1/auth` (JSON body or Basic) → JWT; users table with Argon2id; admin seeded from `.env` |
 | 5 | Metadata extraction | ✅ | `pg_catalog` inspection, optional `schema_name` filter, generic error messages |
-| 6 | Metadata CRUD | ✅ | Under `/api/v1`; delete keeps the connection; pagination |
-| 7 | LLM classification engine | ✅ | `httpx` `LLMClient`, masking, 12-key distribution + `pii_likelihood`, validation/normalization, retries. TCKN / Luhn checksum fusion. Verified with OpenAI `gpt-4o-mini` (Run 4: 29/29) |
-| 8 | Security & validation | ✅ | All spec §9 controls implemented (see the table in §3) |
-| 9 | Testing & QA | ✅ | 150 tests: unit + integration + e2e, via `docker compose --profile test run --rm tests` |
-| 10 | Docker & documentation | ✅ | Compose (app, system-db, demo-db + test profile); README covers all spec §13 items; web UI at `/ui/` |
+| 6 | Metadata CRUD | ✅ | Under `/api/v1` (plus PDF root-path aliases); delete keeps the connection; pagination |
+| 7 | LLM classification engine | ✅ | `httpx` `LLMClient`, masking, 12-key distribution + `pii_likelihood`, validation/normalization, retries, TCKN / Luhn checksum fusion |
+| 8 | Security & validation | ✅ | All spec §9 controls (see §3) |
+| 9 | Testing & QA | ✅ | 150 tests (126 unit, 19 integration, 5 e2e), see §6 |
+| 10 | Docker & documentation | ✅ | Compose (app, system-db, demo-db + test profile); README covers spec §13; web UI at `/ui/` |
 | 11 | Java migration (AI-assisted) | ⬜ | Not started |
 
 ---
 
-## 2. Definition of Done (live)
+## 2. Definition of Done
 
 - [x] All six required services are implemented (under `/api/v1`)
 - [x] Authentication works (JSON body or Basic → JWT; Argon2id users table)
 - [x] External PostgreSQL metadata extraction works
 - [x] Column UUIDs are generated and persisted
-- [x] Metadata listing works
-- [x] Metadata details work
-- [x] Metadata deletion works (connection is kept)
+- [x] Metadata listing, details and deletion work (deletion keeps the connection)
 - [x] Sample data extraction works
-- [x] LLM classification works (real provider `gpt-4o-mini`, Run 4: 29/29)
+- [x] LLM classification works (real provider `gpt-4o-mini`, 29/29 on the demo columns)
 - [x] All 12 PII categories are supported
 - [x] Classification probabilities are validated
 - [x] Database credentials are encrypted at rest (AES-256-GCM)
-- [x] Sensitive samples are protected before external transmission (`SAMPLE_MASKING_MODE`, default `partial`)
-- [x] Unit and integration tests pass (150 passed: unit, integration, e2e)
+- [x] Sensitive samples are masked before they are sent to the LLM (`SAMPLE_MASKING_MODE`, default `partial`)
+- [x] TCKN / Luhn checks are combined with the LLM output
+- [x] Unit, integration and e2e tests pass (150)
 - [x] Web UI for all six services (`/ui/`)
-- [x] Docker Compose starts the application successfully
-- [x] `.env.example` is provided
-- [x] README is complete
+- [x] Docker Compose starts the application
+- [x] `.env.example` and README are complete
 - [ ] Java implementation reproduces the Python system
 - [ ] AI migration prompts and methods are documented
 
 ---
 
-## 3. Gap Analysis (Spec vs. Current Implementation)
+## 3. Gap Analysis (Spec vs. Implementation)
 
 | Spec | Requirement | Status | Implementation |
 |---|---|---|---|
@@ -63,7 +61,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | §5.2, §5.6 | Connection 1:N snapshots; deleting metadata keeps the connection | ✅ | Migration `0002`; connection upsert (D6); FK `RESTRICT` |
 | §5.3 | `metadata.schema_name`, `metadata.table_count` | ✅ | Persisted; optional schema filter (D5) |
 | §4 | `psycopg`, `httpx` | 🟡 | `httpx` ✅; `asyncpg` kept instead of `psycopg` (D4, documented deviation) |
-| §6.6 | `classification` object with 12 lowercase keys | ✅ | Plus `pii_likelihood` (D1) |
+| §6.6 | `classification` object with 12 lowercase keys | ✅ | Plus `pii_likelihood` (D1) and checksum fields (D10) |
 | §6.6 step 8, §8 | Mask samples before sending them to the LLM | ✅ | `services/sample_sanitizer.py`, `SAMPLE_MASKING_MODE` (D3) |
 | §8 | Provider-independent `LLMClient` | ✅ | `infrastructure/llm/llm_client.py`; parsing in `services/classification_parser.py` |
 | §9 | Generic errors for target DB failures | ✅ | Logs contain host/db + SQLSTATE only |
@@ -73,271 +71,183 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | §9 | No credentials / raw PII in logs | ✅ | Covered by integration tests |
 | §10 | Layered project structure | ✅ | Small deviation: `domain/models.py`, `enums.py`, `schemas.py` are files, not folders |
 | §11 | `tests/unit`, `integration`, `e2e`; dedicated test DB | ✅ | Compose `test` profile with tmpfs databases |
-| §12 | `APP_ENV`, `JWT_SECRET_KEY`, `LLM_TIMEOUT`, … | 🟡 | All present except `APP_SECRET_KEY` (D7, documented) |
-| §13 | README sections 1–14 | ✅ | Rewritten |
+| §12 | `APP_ENV`, `JWT_SECRET_KEY`, `LLM_TIMEOUT`, … | 🟡 | All present except `APP_SECRET_KEY` (D7) |
+| §13 | README sections 1–14 | ✅ | `README.md` |
 
----
+### 3a. Original PDF Requirements
 
-## 3a. Original PDF Requirements Check (2026-11-05)
-
-Each row was verified by calling the running stack and by the test suite.
-
-| PDF requirement | Status | Evidence / note |
+| PDF requirement | Status | Evidence |
 |---|---|---|
-| FastAPI, PostgreSQL target, OpenAI-compatible LLM, Docker + Compose | ✅ | Stack in `docker-compose.yml`; LLM via `LLM_BASE_URL` |
+| FastAPI, PostgreSQL target, OpenAI-compatible LLM, Docker + Compose | ✅ | `docker-compose.yml`; LLM via `LLM_BASE_URL` |
 | Basic Authentication | ✅ | `POST /api/v1/auth` with Basic (or JSON); Basic also accepted on every endpoint |
-| 1. `/auth`: user authentication + token management | ✅ | JWT issued and verified. Served at `/auth` and `/api/v1/auth` (D8) |
-| 2. `POST /db/metadata`: input host/port/database/username/password | ✅ | Live: demo DB → 9 relations |
-| 2. Output: metadata ID, table list, columns with unique ID, data types | ✅ | UUID per column; types from `format_type()` |
-| 2. Store in system DB, unique column IDs, secure connection storage | ✅ | AES-256-GCM encrypted password; integration tests |
-| 3. `GET /metadata`: IDs, database names, creation dates, table counts | ✅ | Live list output |
-| 4. `GET /metadata/{id}`: tables, column details, column IDs, types | ✅ | Live 200; 404 when unknown |
+| 1. `/auth`: user authentication + token management | ✅ | JWT issued and verified; served at `/auth` and `/api/v1/auth` (D8) |
+| 2. `POST /db/metadata`: host/port/database/username/password in | ✅ | Demo DB → 9 relations |
+| 2. Out: metadata ID, table list, columns with unique ID, data types | ✅ | UUID per column; types from `format_type()` |
+| 2. Store in system DB, unique column IDs, secure connection storage | ✅ | AES-256-GCM encrypted password |
+| 3. `GET /metadata`: IDs, database names, creation dates, table counts | ✅ | `MetadataSummary` |
+| 4. `GET /metadata/{id}`: tables, column details, column IDs, types | ✅ | 200; 404 when unknown |
 | 5. `DELETE /metadata/{id}`: deletion status | ✅ | `{"metadata_id": …, "deleted": true}` |
 | 6. `POST /classify`: column ID + sample count (default 10) | ✅ | Default 10, max `MAX_SAMPLE_COUNT` |
-| 6. Finds metadata + connection from the column ID; extracts samples | ✅ | Integration + e2e tests against the demo data |
-| 6. Classifies with an LLM; probability distribution over predefined classes | ✅ | Real provider run (OpenAI `gpt-4o-mini`): 29/29 on the demo columns (§7 Run 4) |
+| 6. Finds metadata + connection from the column ID; extracts samples | ✅ | Integration + e2e tests on the demo data |
+| 6. LLM classification; probability distribution over predefined classes | ✅ | `gpt-4o-mini`: 29/29 (§7) |
 | 12 PII categories | ✅ | All 12 always returned |
-| All config in `.env` (system DB, Basic credentials, LLM, …) | ✅ | `app/core/config.py` reads only env. Exception: the test-profile throwaway DB credentials are fixed in compose |
-| Working Docker setup with docker-compose | ✅ | `docker compose up --build -d` → app, system-db, demo-db healthy |
-| Comprehensive README with setup instructions | ✅ | `README.md` |
-| `.env.example` with all required variables | ✅ | `.env.example` |
+| All config in `.env` | ✅ | `app/core/config.py` reads only env (test-profile throwaway DB credentials are fixed in compose) |
+| Working Docker setup, README, `.env.example` | ✅ | |
 | Task 2: Java conversion with AI, documenting steps/methods/prompts | ⬜ | Next phase |
-
-**Found and fixed during this check:** with an empty `LLM_API_KEY`, the client sent an invalid `Authorization: Bearer ` header. The result was a confusing `LocalProtocolError` that was retried as if it were transient. Now no header is sent when the key is empty (this also lets key-less local providers like Ollama work), and a missing key surfaces as `HTTP 401`. Unit test added.
 
 ---
 
 ## 4. Decisions
 
-| ID | Topic | Decision | Decided by |
-|---|---|---|---|
-| D1 | Non-PII outcome | 12-key `classification` object exactly as in the spec (always sums to 1: "which category does this column most resemble"), plus a separate `pii_likelihood` field (0–1). Without it, a column like `unit_price` would be forced into a PII class | User, 2026-11-05 |
-| D2 | Auth request format | `POST /api/v1/auth` accepts **both** a JSON body (spec) and an HTTP Basic header (case study) | User, 2026-11-05 |
-| D3 | Sample masking | Configurable `SAMPLE_MASKING_MODE=none\|partial\|strict`, default `partial`. Partial: mask the email local part (keep the domain) and the middle digits of values with ≥6 digits (keep length and separators); leave names and addresses unchanged. Strict: letters → `x`/`X`, digits → `9` | User, 2026-11-05 |
-| D4 | Libraries | `httpx`-based, provider-agnostic `LLMClient` (replaces the `openai` SDK). Keep `asyncpg` (documented deviation from the spec's `psycopg`) | User, 2026-11-05 |
-| D5 | Metadata scope per snapshot | Optional `schema_name` filter in the request, stored in `metadata.schema_name` (`NULL` = all non-system schemas) | Recommended default |
-| D6 | Connection reuse | Reuse the connection row for the same host/port/database/username (upsert, refreshing the encrypted password) | Recommended default |
-| D7 | `APP_SECRET_KEY` | Left out: the spec defines no use for it. `APP_ENV` is added (`production` disables the Swagger UI) | Recommended default |
-| D8 | PDF paths (`/auth`, `/metadata`, …) vs. spec `/api/v1/...` | The same routes are also served at the PDF root paths as aliases, hidden from Swagger. `/api/v1` stays the documented API | User, 2026-11-05 |
-| D10 | TCKN / Luhn checks | Run on raw samples inside the app (only counts leave the module), fused into the LLM distribution: TCKN evidence first moves `national_id_number` mass to `tckn` (specific absorbs generic), then `(1−w)·llm + w·one_hot`. Weights: checksum 0.6, TCKN format-only 0.3 (the demo and PDF TCKNs fail the checksum), Luhn 0.6; ≥ 80% of samples must pass. Response keeps the LLM-only values (`llm_classification`, `llm_pii_likelihood`) and lists `checksum_evidence`. Toggle `CHECKSUM_VALIDATION_ENABLED` | User asked, 2026-11-05; design by Claude |
-| D11 | Web UI | Static HTML/JS/CSS in `app/static`, served by FastAPI at `/ui/` (`/` redirects). No build step or CDN; same origin, so no CORS. Strict CSP header; token in `sessionStorage`. English, like the API and docs | User asked, 2026-11-05; design by Claude |
-| D9 | LLM for verification | First Ollama + `llama3.1` as the compose service `ollama` (profile `local-llm`; `brew install` was blocked by the Xcode license). After Run 1 (CPU-only, slow, weak instruction following): **switched to OpenAI** (`gpt-4o-mini`) for verification. Ollama stays as a documented local option | User, 2026-11-05 |
+| ID | Topic | Decision |
+|---|---|---|
+| D1 | Non-PII outcome | 12-key `classification` exactly as in the spec (always sums to 1), plus a separate `pii_likelihood` (0–1). Without it, a column like `unit_price` would be forced into a PII class. An all-zero LLM answer means "no category fits": uniform distribution, `predicted_category: null`, `pii_likelihood: 0` |
+| D2 | Auth request format | `POST /api/v1/auth` accepts both a JSON body (spec) and an HTTP Basic header (case study) |
+| D3 | Sample masking | `SAMPLE_MASKING_MODE=none\|partial\|strict`, default `partial`. Partial: mask the email local part (keep the domain) and the middle digits of values with ≥ 6 digits (keep length and separators); names and addresses unchanged. Strict: letters → `x`/`X`, digits → `9` |
+| D4 | Libraries | `httpx`-based, provider-agnostic `LLMClient` instead of the `openai` SDK. `asyncpg` kept (deviation from the spec's `psycopg`) |
+| D5 | Metadata scope | Optional `schema_name` filter, stored in `metadata.schema_name` (`NULL` = all non-system schemas) |
+| D6 | Connection reuse | Same host/port/database/username reuses the connection row (upsert, refreshing the encrypted password) |
+| D7 | `APP_SECRET_KEY` | Left out (no use defined in the spec). `APP_ENV=production` disables Swagger |
+| D8 | PDF paths vs. `/api/v1` | PDF root paths (`/auth`, `/metadata`, …) are served as aliases with the same handlers, hidden from OpenAPI |
+| D9 | LLM provider | OpenAI `gpt-4o-mini` for verification. Ollama (`llama3.1`, compose profile `local-llm`) stays as a documented local option; on CPU it was slow and followed the JSON contract poorly (Run 1) |
+| D10 | TCKN / Luhn checks | Run on the raw samples inside the app (only match counts leave the module) and fused into the LLM distribution. TCKN evidence first moves `national_id_number` probability to `tckn` (specific absorbs generic), then `(1−w)·llm + w·one_hot`. Weights: TCKN checksum 0.6, TCKN format only 0.3, Luhn 0.6; ≥ 80% of non-empty samples must pass. The response also returns the LLM-only values and the applied evidence. Toggle: `CHECKSUM_VALIDATION_ENABLED` |
+| D11 | Web UI | Static HTML/JS/CSS in `app/static`, served at `/ui/` (`/` redirects). No build step or CDN; same origin, so no CORS. Strict CSP response header; token in `sessionStorage` |
 
 ---
 
-## 5. Next Steps (planned order)
+## 5. Next Steps
 
-1. ~~Robustness fixes from Run 1~~ ✅ Verified in Run 3: 28/29.
-2. ~~TCKN / Luhn checksum fusion~~ ✅ (D10). Run 4: 29/29.
-3. ~~Web UI~~ ✅ (D11).
-4. ~~`git init` + first commit + push~~ ✅ (Steps 23–24).
-5. Java migration (Phase 11) + `docs/MIGRATION_REPORT.md`: per step, the original code, Java equivalent, AI tool, exact prompt, manual corrections, tests and result.
+1. Java migration (Task 2): Spring Boot port with the same endpoints, JSON contract, encryption, masking and checksum rules.
+2. `docs/MIGRATION_REPORT.md`: per step, the original code, Java equivalent, AI tool, exact prompt, manual corrections, tests and result.
+3. Verify the Java port with the same HTTP-only evaluation script (`scripts/evaluate_classification.py`).
 
 ---
 
-## 6. Progress Log
+## 6. Test Cases
 
-### 2026-11-05
+Run with `docker compose --profile test run --rm tests`. Integration and e2e tests use dedicated tmpfs PostgreSQL databases seeded with the demo script; the LLM is mocked with `httpx.MockTransport` (`tests/fakes.py`).
+**Total: 150 passed** (counts include parametrized cases).
 
-- **Step 1: Analysis.** Read the case study PDF and the demo DB script. Produced the development plan (two databases, auth approach, classification design).
-- **Step 2: Python baseline.** Implemented:
-  - FastAPI app; system DB models + Alembic migration `0001`
-  - AES-256-GCM credential encryption; Basic → JWT auth
-  - Metadata extraction via `pg_catalog`; metadata CRUD endpoints
-  - LLM classification (prompt with delimited samples, JSON parsing, normalization, retry)
-  - Dockerfile, `docker-compose.yml` (`app`, `system-db`, `demo-db`), `.env.example`, `README.md`, `requests.http`
-- **Step 3: Verification.**
-  - 33 tests pass (run in a `python:3.12-slim` container).
-  - Compose stack healthy; migrations run on startup; demo DB seeded.
-  - E2E against the demo DB: 8 tables + 1 view extracted, password stored encrypted, cascade delete confirmed.
-  - `/classify` flow verified with a temporary stub LLM: samples fetched, delimited, `temperature=0`, JSON mode on.
-  - **Fix:** `inet::text` returned values with a netmask (`192.168.1.200/32`). Sampling now uses `host()`.
-- **Step 4: Spec received.** Created this `TASK.md` with the technical specification, gap analysis and open decisions.
-- **Step 5: Decisions.** D1–D4 decided by the user; D5–D7 use the recommended defaults (see §4).
-- **Step 6: Restructure to the spec §10 layers.**
-  - New layout: `domain/`, `repositories/`, `infrastructure/database`, `infrastructure/llm`, `api/routes`.
-  - `core/errors.py` → `core/exceptions.py`.
-- **Step 7: Schema rework.**
-  - Added the `users` table.
-  - `db_connections` is now 1─N `db_metadata`, unique on (host, port, database_name, username), with columns renamed to the spec names.
-  - `db_metadata` gained `schema_name` and `table_count`.
-  - Migration `0002` migrates existing data: duplicates are merged, keeping the newest password. Verified on a seeded `0001` database. It is irreversible.
-- **Step 8: Auth rework.**
-  - `POST /api/v1/auth` accepts a JSON body or Basic credentials.
-  - Passwords are hashed with Argon2id.
-  - Unknown users are verified against a dummy hash (timing).
-  - The admin user is created or updated from `.env` at startup.
-- **Step 9: API and security alignment.**
-  - `/api/v1` prefix.
-  - Classify response: 12-key `classification`, `predicted_category`, `pii_likelihood`, `masking_mode`.
-  - Generic target-DB error messages, logging SQLSTATE only.
-  - Identifier validation.
-  - CORS allow-list, off by default.
-  - Request body limit (413).
-  - `APP_ENV=production` disables the docs.
-  - Env vars renamed: `JWT_SECRET` → `JWT_SECRET_KEY`, `LLM_TIMEOUT_SECONDS` → `LLM_TIMEOUT`. The local `.env` was migrated with its secrets kept.
-- **Step 10: LLM layer.**
-  - `openai` SDK replaced by an `httpx` `LLMClient`: retries on timeouts/429/5xx with backoff, no retry on 4xx, re-request on invalid JSON.
-  - Sample masking added (`none` / `partial` / `strict`).
-  - New prompt asks for `pii_likelihood` plus the 12-category distribution.
-- **Step 11: Tests.**
-  - Split into `tests/unit` (77), `tests/integration` (16) and `tests/e2e` (4): 97 tests including parametrized cases, all passing.
-  - Integration and e2e tests run against dedicated tmpfs Postgres databases via the compose `test` profile, with the LLM mocked through `httpx.MockTransport`.
-  - Healthchecks now use TCP (`pg_isready -h 127.0.0.1`), so a database isn't reported healthy while its init scripts are still running.
-- **Step 12: Live smoke test** on the dev stack after rebuilding:
-  - Migration `0001 → 0002` applied on startup; admin user created with an `$argon2id` hash.
-  - JSON and Basic auth both work; old un-versioned paths return 404.
-  - A wrong DB password returns a generic 400, and the log shows only SQLSTATE `28P01`.
-  - Two extractions share one connection; delete keeps the connection.
-- **Step 13: Docs.** README rewritten to cover spec §13 items 1–14; `requests.http` updated.
-- **Step 14: PDF compliance review** (before the Java migration).
-  - Re-ran the full suite and called all six services on the live stack (§3a).
-  - Fixed the empty-`LLM_API_KEY` header bug; tests: 98 passed.
-  - Open items: real-LLM verification and D8 (root path aliases).
-- **Step 15: PDF path aliases (D8).**
-  - `legacy_router` serves `/auth`, `/db/metadata`, `/metadata`, `/metadata/{id}` and `/classify` with the same handlers, hidden from OpenAPI.
-  - Tests: unit (OpenAPI lists only `/api/v1` paths; aliases answer 401, not 404) and e2e (full flow over the root paths). 105 passed.
-- **Step 16: Local LLM (D9).**
-  - `brew install ollama` failed (Xcode license, needs `sudo`), so Ollama was added as the compose service `ollama` (profile `local-llm`) and `llama3.1` (4.9 GB) was pulled.
-  - `.env`: `LLM_BASE_URL=http://ollama:11434/v1`, empty key, `LLM_TIMEOUT=300`, `LLM_MAX_RETRIES=1`.
-  - The first real classification (`customers.national_id`) took 2 min 16 s on CPU (Intel Mac, no GPU) and predicted `national_id_number` (0.80), not the expected `tckn`.
-  - Added `scripts/evaluate_classification.py`: 29 demo columns with expected categories, using the HTTP API only so it can be reused against the Java port.
-- **Step 17: Evaluation Run 1 (Ollama).**
-  - Result: 11/29 (details and findings in §7).
-  - The user's host install of Ollama did not complete and was abandoned in favor of OpenAI (D9).
-  - The `ollama` container is stopped; its model volume `ollama-data` (4.9 GB) was later deleted at the user's request (Step 22).
-  - `.env` LLM settings reverted to OpenAI (`gpt-4o-mini`, timeout 30, retries 2); `LLM_API_KEY` is still empty.
-- **Step 18: Evaluation Run 2 (OpenAI `gpt-4o-mini`).**
-  - The first attempt returned 429; OpenAI's body said `insufficient_quota` (no credits). The user added credits.
-  - Result: 13/29. PII columns 14/16 correct; all 14 non-PII columns fail with the all-zero 502 (§7).
-  - Finding: a 429 caused by `insufficient_quota` is retried as if it were transient, and the API only reports "HTTP 429". It should fail fast with a clear message.
-- **Step 19: Full re-run of the current version (Run 3).**
-  - `docker compose up --build -d`: app, system-db, demo-db healthy. The demo DB script in `db/demo/` is the case study's attached script.
-  - Test suite: **111 passed** (`docker compose --profile test run --rm tests`); test DBs removed afterwards.
-  - Live calls to all six services: auth → JWT; metadata extraction (9 relations); list; detail 200; classify (`customers.email` → `email_address`); delete → `deleted: true`.
-  - Evaluation with `gpt-4o-mini` after the robustness fixes: **28/29** (Run 2: 13/29). All 14 non-PII columns now return `predicted_category: null`, `pii_likelihood: 0`. Only miss: `customers.national_id` → `national_id_number` (0.5 vs `tckn` 0.5).
-  - The host's `python3` is too old for the evaluation script (`X | None` syntax); run it in the app container: `docker compose exec -T app python - < scripts/evaluate_classification.py`.
-- **Step 20: Checksum fusion (D10).**
-  - New `app/services/checksum_evidence.py`: `is_valid_tckn`, `is_tckn_format`, `is_valid_luhn_card`, `collect_evidence`, `fuse`; wired into `classification_service` behind `CHECKSUM_VALIDATION_ENABLED` (added to `.env`, `.env.example`, config).
-  - Response gained `llm_classification`, `llm_pii_likelihood`, `checksum_evidence`.
-  - Finding: only 1 of the 5 demo TCKNs (`55443322110`) passes the checksum, and neither PDF example does, hence the format-only tier.
-  - Finding: `gpt-4o-mini` is not deterministic on `national_id` even at `temperature=0` (tckn/nid 0.5/0.5, 0.1/0.9, 0/1 over repeated calls). Plain mixing with weight 0.3 left the 0.1/0.9 case at `national_id_number` 0.63, so TCKN evidence now first moves the generic `national_id_number` mass to `tckn`. After that: 5/5 repeated calls → `tckn` 1.0.
-  - Tests: unit checks for valid/invalid TCKN and cards, evidence thresholds and fusion (incl. the three observed LLM replies, and `ssn` surviving on the 11-digit SSN column); integration tests on the demo `national_id` column and the disable flag.
-- **Step 21: Web UI (D11).**
-  - `app/static/{index.html,app.js,styles.css}`: sign in, scan form, snapshot list/detail/delete, table filter, per-column and per-table classification, result panel with distribution bars (final vs. LLM-only), evidence and reasoning. Light/dark, responsive.
-  - CSP moved from a `<meta>` tag to a response header (browsers ignore `frame-ancestors` in meta); bar widths set through CSSOM so no `'unsafe-inline'` is needed.
-  - Checked in headless Chrome (desktop light/dark, 390 px mobile): no console errors, no horizontal overflow. Fixed a sidebar input overflow found there.
-  - Unit test for `/` → `/ui/`, the assets and the CSP header. Suite: **150 passed**.
-  - Evaluation Run 4: **29/29** (§7).
-- **Step 22: Cleanup.** At the user's request, removed the stopped `case_study-ollama-1` container and the `case_study_ollama-data` volume (4.9 GB, `llama3.1`), then the `ollama/ollama` image (5.06 GB). The `ollama` compose service (profile `local-llm`) and its README section stay as an optional local setup; using it again re-pulls the image and the model.
-- **Step 23: Git.** `git init -b main`, first commit `ee347f2` (75 files). Before committing: `.env` is ignored; no `sk-` keys or private keys in tracked files; the only `.env` values found in tracked files are the `.env.example` defaults (`change-me-*`, demo DB name, OpenAI base URL). Remote `origin` = `git@github.com:kubrafelek/LLM-Based-Database-Data-D-scovery-System.git`. The push from this environment failed (`Permission denied (publickey)`), so the user pushes from their own terminal.
-- **Step 24: Pushed to GitHub.** The user set up `gh auth login` (HTTPS) and switched `origin` to `https://github.com/kubrafelek/LLM-Based-Database-Data-D-scovery-System.git`. The remote already had an `Initial commit` with only `LICENSE` (MIT), so it was merged with `--allow-unrelated-histories` (no conflicts) and pushed: `main` = `1d54a6e`, 77 files, `.env` not included.
-- **Note:** `docker compose --profile test down` also stopped the dev stack. It was restarted; volumes and data were unaffected. Use `docker compose rm -sf test-system-db test-target-db` to clean up only the test databases (now in the README).
+### Unit (126)
+
+| File | # | Cases |
+|---|---|---|
+| `test_api.py` | 22 | `/health`; the 5 protected endpoints return 401 without auth; invalid bearer token → 401; auth without credentials → 401 + `WWW-Authenticate: Basic`; OpenAPI lists only `/api/v1` paths; the 6 PDF root-path aliases exist; `column_id` and `sample_count` validation (422); oversized body → 413; CORS off by default; `/` → `/ui/`, UI assets served with the CSP header |
+| `test_checksum_evidence.py` | 36 | Valid TCKNs (4); invalid TCKNs: wrong check digits, leading 0, 10 digits, separators, empty (6); format check ignores check digits; valid / invalid Luhn cards incl. masked and wrong-separator values (4 + 5); strong evidence for checksum-valid TCKNs; weak evidence for the demo TCKNs (format only); Luhn evidence; no evidence for 7 non-matching sample sets (emails, phones, 10-digit tax numbers, < 80% match, Luhn-failing cards); fusion: the three observed LLM replies for `national_id` (0.5/0.5, 0.1/0.9, 0/1) all end at `tckn` 1.0; `ssn` survives on an 11-digit column (0.7 / 0.3); Luhn pulls toward credit card; no evidence = identity |
+| `test_classification_parser.py` | 18 | Missing categories filled and rescaled; sum within tolerance; 6 unusable inputs rejected; all-zero → "no category fits" (uniform, `pii_likelihood` 0); 6 invalid `pii_likelihood` values rejected; non-string reasoning ignored |
+| `test_llm_client.py` | 16 | OpenAI-compatible request body (`temperature=0`, JSON mode); JSON mode can be disabled; retries on transient failures, gives up after max retries; no retry on 4xx; 429 rate limit retried; `insufficient_quota` fails fast with a clear message (2); empty API key sends no `Authorization` header; re-request when the parser rejects a reply; code fences tolerated; 3 invalid contents rejected; unexpected response shape rejected |
+| `test_prompts.py` | 4 | System prompt lists all 12 categories; samples JSON-encoded between markers; masking described; prompt without samples |
+| `test_sample_sanitizer.py` | 13 | `none` returns values unchanged; 9 partial-masking cases (email, TCKN, phone, date, IP, card masked; already-masked card, address and name unchanged); 3 strict cases (shape only) |
+| `test_security.py` | 10 | AES-GCM round trip with a random nonce; wrong key, tampered ciphertext and 2 invalid keys rejected; JWT round trip; expired and foreign-key tokens rejected; Argon2id hash verifies; malformed hash rejected |
+| `test_target_database.py` | 7 | Identifier quoting escapes `"`; 3 invalid identifiers rejected; sample query quotes identifiers and binds `LIMIT`; `inet` sampled via `host()` (no netmask); `ConnectionInfo` repr hides the password |
+
+### Integration (19)
+
+| File | # | Cases |
+|---|---|---|
+| `test_auth_service.py` | 4 | Authenticate valid/invalid users; admin seeding stores an Argon2 hash, is idempotent and applies a changed password |
+| `test_metadata_service.py` | 6 | Demo schema extracted and persisted (8 tables + 1 view, column UUIDs); password encrypted at rest; list / get / delete; schema filter; snapshots reuse one connection; bad credentials give a generic error and no secret in the logs |
+| `test_classification_flow.py` | 9 | Email column classified with masked samples (no raw email in the prompt or the logs); "no category fits" accepted on the first reply; masking can be disabled; `sample_count` limits the samples; above `MAX_SAMPLE_COUNT` rejected; unknown column → 404; empty column classified from metadata only; demo `national_id` with a 0.5/0.5 LLM tie → `tckn` 1.0 via `tckn_format` 5/5 (raw values not sent to the LLM); checksum validation can be disabled |
+
+### End-to-end (5)
+
+| File | # | Cases |
+|---|---|---|
+| `test_full_flow.py` | 5 | Full business flow over HTTP (auth → extract → list → detail → classify → delete); Basic credentials accepted; invalid credentials rejected; PDF root paths work as aliases; unreachable target DB → generic 400 |
+
+### Classification evaluation (real LLM)
+
+`scripts/evaluate_classification.py` classifies 29 demo columns over the HTTP API only (reusable against the Java port) and compares them with expected categories. Results in §7.
 
 ---
 
-## 7. Classification Evaluation Results
+## 7. Technical Change Log
 
-Produced by `scripts/evaluate_classification.py`: 29 demo columns, `sample_count=10`, `SAMPLE_MASKING_MODE=partial`.
-**Outcome** is the predicted category when `pii_likelihood ≥ 0.5`, otherwise `not_pii`.
+### Baseline (Steps 1–3)
+- FastAPI app; system DB models + Alembic migration `0001`; AES-256-GCM credential encryption; Basic → JWT auth.
+- Metadata extraction via `pg_catalog`; metadata CRUD endpoints.
+- LLM classification: prompt with delimited samples, JSON parsing, normalization, retry.
+- Dockerfile, `docker-compose.yml` (`app`, `system-db`, `demo-db`), `.env.example`, README, `requests.http`.
+- **Fix:** `inet::text` returned values with a netmask (`192.168.1.200/32`); sampling now uses `host()`.
 
-### Run 4: 2026-11-05, OpenAI `gpt-4o-mini`, with checksum fusion (D10)
+### Alignment with the technical spec (Steps 4–13)
+- Layered structure per spec §10: `domain/`, `repositories/`, `infrastructure/database`, `infrastructure/llm`, `api/routes`; `core/errors.py` → `core/exceptions.py`.
+- Schema: `users` table; `db_connections` 1─N `db_metadata`, unique on (host, port, database_name, username), spec column names; `db_metadata.schema_name` and `table_count`. Migration `0002` migrates existing data (duplicates merged, newest password kept; irreversible).
+- Auth: JSON body or Basic; Argon2id; unknown users verified against a dummy hash (timing); admin created/updated from `.env` at startup.
+- API and security: `/api/v1` prefix; classify response with 12-key `classification`, `predicted_category`, `pii_likelihood`, `masking_mode`; generic target-DB errors (SQLSTATE-only logs); identifier validation; CORS allow-list (off by default); request body limit (413); `APP_ENV=production` disables the docs. Env vars renamed to the spec names (`JWT_SECRET_KEY`, `LLM_TIMEOUT`).
+- LLM layer: `httpx` `LLMClient` (retries on timeouts / 429 / 5xx with backoff, none on 4xx, re-request on invalid JSON); sample masking; prompt asks for `pii_likelihood` plus the distribution.
+- Tests split into `tests/unit`, `tests/integration`, `tests/e2e` with tmpfs databases (compose `test` profile). Healthchecks use TCP (`pg_isready -h 127.0.0.1`) so a DB isn't healthy while its init scripts run.
 
-**Result: 29/29 as expected.** Same as Run 3 except `customers.national_id` → `tckn` 1.00 (evidence: `tckn_format` 5/5, weight 0.3, plus the `national_id_number` → `tckn` transfer). `employees.social_security_number` stays `ssn` 0.70 (`tckn` 0.30). Five repeated `national_id` calls all gave `tckn` 1.0 while the LLM alone answered 0.5/0.5 twice and `national_id_number` 1.0 three times.
+### PDF compliance (Steps 14–15)
+- **Fix:** an empty `LLM_API_KEY` sent an invalid `Authorization: Bearer ` header (confusing `LocalProtocolError`, retried as transient). Now no header is sent when the key is empty; a missing key surfaces as HTTP 401.
+- PDF root-path aliases (D8): `legacy_router` serves `/auth`, `/db/metadata`, `/metadata`, `/metadata/{id}`, `/classify` with the same handlers, hidden from OpenAPI.
 
-### Run 3: 2026-11-05, OpenAI `gpt-4o-mini`, after the robustness fixes
+### Real-LLM verification (Steps 16–19)
+- `scripts/evaluate_classification.py` added: 29 demo columns with expected categories.
+- Run 1 (Ollama `llama3.1`, CPU) 11/29 and Run 2 (`gpt-4o-mini`) 13/29 exposed a contract gap: models answer all-zero for non-PII columns, and the parser rejected that with a 502.
+- **Fixes:** all-zero → valid "no category fits" result (D1); clearer prompt (`pii_likelihood` definition, consistency rule, TCKN format); a 429 with `insufficient_quota` / `credit_balance_exhausted` fails fast with a clear message instead of being retried.
+- Run 3: 28/29. Remaining miss: `customers.national_id` → `national_id_number` (0.5/0.5 tie with `tckn`).
 
-**Result: 28/29 as expected** (Run 2: 13/29). Latency 2–3 s per column.
+### Checksum fusion (Step 20, D10)
+- New `app/services/checksum_evidence.py`: `is_valid_tckn`, `is_tckn_format`, `is_valid_luhn_card`, `collect_evidence`, `fuse`; wired into `classification_service` behind `CHECKSUM_VALIDATION_ENABLED`.
+- Response gained `llm_classification`, `llm_pii_likelihood`, `checksum_evidence`.
+- Finding: only 1 of the 5 demo TCKNs (`55443322110`) and neither PDF example passes the checksum, hence the format-only tier.
+- Finding: `gpt-4o-mini` is not deterministic on `national_id` even at `temperature=0` (tckn / national_id 0.5/0.5, 0.1/0.9, 0/1 over repeated calls). Plain mixing with weight 0.3 left the 0.1/0.9 case at `national_id_number` 0.63, so TCKN evidence now first moves the generic `national_id_number` probability to `tckn`. After that, 5/5 repeated calls → `tckn` 1.0.
+- Run 4: 29/29.
 
-1. **Non-PII columns: 14/14 correct.** The all-zero answer is now accepted as "no category fits" (`predicted_category: null`, `pii_likelihood: 0`) instead of a 502.
-2. **`pii_likelihood` is consistent:** 0.90 for every PII column (`street_address` fixed).
-3. **Only miss:** `customers.national_id` → `national_id_number` 0.50 / `tckn` 0.50; the tie is resolved to `national_id_number`.
-4. `employees.tax_number` → not_pii (accepted).
+### Web UI (Step 21, D11)
+- `app/static/{index.html,app.js,styles.css}`: sign in, scan form, snapshot list / detail / delete, table filter, per-column and per-table classification, result panel (distribution bars final vs. LLM-only, evidence, reasoning). Light/dark, responsive.
+- CSP sent as a response header (`frame-ancestors` is ignored in a `<meta>` tag); bar widths set via CSSOM, so no `'unsafe-inline'` is needed. All server data rendered with `textContent`.
+- Verified in headless Chrome (desktop light/dark, 390 px mobile): no console errors, no horizontal overflow.
 
-### Run 1: 2026-11-05, Ollama `llama3.1` (8B, CPU-only, Docker), before the robustness fixes
+---
 
-**Result: 11/29 as expected.** Main findings:
+## 8. Classification Evaluation Results
 
-1. **Non-PII columns fail with 502 (12 columns).** The model returns 0 for all 12 categories, ignoring the "must sum to 1" rule. The parser rejects that after 3 attempts. This is a design gap regardless of the LLM: "no category fits" must produce a valid answer, not an error.
-2. **`pii_likelihood` is inconsistent.** `last_name` and `street_address` got the right category at 1.00 but `pii_likelihood` 0.00.
-3. **Category mix-ups.** `national_id` (11-digit TCKN, partially masked) → `national_id_number`; `tax_number` → `ssn`.
-4. **Infrastructure.** The last 2 columns failed with `ConnectError`: Ollama became unreachable at the end of the run (no OOM kill, no restart; cause unknown). Latency was 19 s – 8.6 min per column on the CPU.
+`scripts/evaluate_classification.py`: 29 demo columns, `sample_count=10`, `SAMPLE_MASKING_MODE=partial`. **Outcome** is the predicted category when `pii_likelihood ≥ 0.5`, otherwise `not_pii`.
 
-| Column | Expected | Predicted | P(pred) | pii_likelihood | Outcome | ✓ | Time |
-|---|---|---|---|---|---|---|---|
-| customers.first_name | first_name | first_name | 1.00 | 1.00 | first_name | ✅ | 49s |
-| customers.last_name | last_name | last_name | 1.00 | 0.00 | not_pii | ❌ | 49s |
-| customers.email | email_address | email_address | 1.00 | 1.00 | email_address | ✅ | 47s |
-| customers.phone_number | phone_number | phone_number | 0.90 | 0.90 | phone_number | ✅ | 23s |
-| customers.date_of_birth | date_of_birth | date_of_birth | 1.00 | 1.00 | date_of_birth | ✅ | 19s |
-| customers.national_id | tckn | national_id_number | 0.80 | 0.90 | national_id_number | ❌ | 26s |
-| customers.gender | not_pii | 502: all-zero distribution | | | | ❌ | 140s |
-| customers.registration_date | not_pii | 502: all-zero distribution | | | | ❌ | 299s |
-| customers.customer_notes | not_pii | 502: all-zero distribution | | | | ❌ | 273s |
-| customer_addresses.street_address | home_address | home_address | 1.00 | 0.00 | not_pii | ❌ | 48s |
-| customer_addresses.city | home_address / not_pii | 502: all-zero distribution | | | | ❌ | 148s |
-| customer_addresses.postal_code | home_address / not_pii | 502: all-zero distribution | | | | ❌ | 519s |
-| employees.first_name | first_name | first_name | 0.80 | 0.80 | first_name | ✅ | 22s |
-| employees.email | email_address | email_address | 1.00 | 1.00 | email_address | ✅ | 47s |
-| employees.phone | phone_number | phone_number | 0.80 | 0.90 | phone_number | ✅ | 36s |
-| employees.social_security_number | ssn / tckn | ssn | 1.00 | 1.00 | ssn | ✅ | 49s |
-| employees.tax_number | not_pii / national_id_number | ssn | 0.60 | 0.90 | ssn | ❌ | 32s |
-| employees.bank_account_iban | not_pii | 502: all-zero distribution | | | | ❌ | 167s |
-| employees.salary | not_pii | 502: all-zero distribution | | | | ❌ | 115s |
-| employees.hire_date | not_pii | 502: all-zero distribution | | | | ❌ | 105s |
-| payment_methods.card_number_masked | credit_card_number | credit_card_number | 0.80 | 0.90 | credit_card_number | ✅ | 26s |
-| payment_methods.card_holder_name | full_name | full_name | 0.80 | 0.90 | full_name | ✅ | 22s |
-| payment_methods.bank_name | not_pii | 502: all-zero distribution | | | | ❌ | 164s |
-| orders.order_number | not_pii | 502: all-zero distribution | | | | ❌ | 120s |
-| orders.notes | not_pii | 502: all-zero distribution | | | | ❌ | 136s |
-| audit_logs.ip_address | ip_address | ip_address | 0.90 | 0.90 | ip_address | ✅ | 24s |
-| audit_logs.user_agent | not_pii | 502: all-zero distribution | | | | ❌ | 125s |
-| products.product_name | not_pii | 502: ConnectError | | | | ❌ | 90s |
-| products.unit_price | not_pii | 502: ConnectError | | | | ❌ | 1s |
+| Run | LLM | Code state | Result | Main finding |
+|---|---|---|---|---|
+| 1 | Ollama `llama3.1` 8B (CPU) | Before robustness fixes | 11/29 | 12 non-PII columns → 502 (all-zero distribution); `pii_likelihood` inconsistent; 19 s – 8.6 min per column |
+| 2 | `gpt-4o-mini` | Before robustness fixes | 13/29 | PII 14/16 correct; all 14 non-PII columns → 502: the gap is in the contract, not the model |
+| 3 | `gpt-4o-mini` | Robustness fixes | 28/29 | Non-PII 14/14; only miss `national_id` → `national_id_number` |
+| 4 | `gpt-4o-mini` | + checksum fusion (D10) | **29/29** | `national_id` → `tckn` 1.00; `social_security_number` stays `ssn` 0.70 |
 
-**11/29 columns as expected** (sample_count=10)
+### Run 4 (current)
 
-### Run 2: 2026-11-05, OpenAI `gpt-4o-mini`, before the robustness fixes
+| Column | Expected | Predicted | P(pred) | pii_likelihood | Outcome | ✓ |
+|---|---|---|---|---|---|---|
+| customers.first_name | first_name | first_name | 1.00 | 0.90 | first_name | ✅ |
+| customers.last_name | last_name | last_name | 1.00 | 0.90 | last_name | ✅ |
+| customers.email | email_address | email_address | 1.00 | 0.90 | email_address | ✅ |
+| customers.phone_number | phone_number | phone_number | 1.00 | 0.90 | phone_number | ✅ |
+| customers.date_of_birth | date_of_birth | date_of_birth | 1.00 | 0.90 | date_of_birth | ✅ |
+| customers.national_id | tckn | tckn | 1.00 | 0.93 | tckn | ✅ |
+| customers.gender | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| customers.registration_date | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| customers.customer_notes | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| customer_addresses.street_address | home_address | home_address | 1.00 | 0.90 | home_address | ✅ |
+| customer_addresses.city | home_address / not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| customer_addresses.postal_code | home_address / not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| employees.first_name | first_name | first_name | 1.00 | 0.90 | first_name | ✅ |
+| employees.email | email_address | email_address | 1.00 | 0.90 | email_address | ✅ |
+| employees.phone | phone_number | phone_number | 1.00 | 0.90 | phone_number | ✅ |
+| employees.social_security_number | ssn / tckn | ssn | 0.70 | 0.93 | ssn | ✅ |
+| employees.tax_number | not_pii / national_id_number | (none) | – | 0.00 | not_pii | ✅ |
+| employees.bank_account_iban | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| employees.salary | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| employees.hire_date | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| payment_methods.card_number_masked | credit_card_number | credit_card_number | 1.00 | 0.90 | credit_card_number | ✅ |
+| payment_methods.card_holder_name | full_name | full_name | 1.00 | 0.90 | full_name | ✅ |
+| payment_methods.bank_name | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| orders.order_number | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| orders.notes | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| audit_logs.ip_address | ip_address | ip_address | 1.00 | 0.90 | ip_address | ✅ |
+| audit_logs.user_agent | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| products.product_name | not_pii | (none) | – | 0.00 | not_pii | ✅ |
+| products.unit_price | not_pii | (none) | – | 0.00 | not_pii | ✅ |
 
-**Result: 13/29 as expected.** Same code as Run 1, only the LLM changed. Latency 2–9 s per column.
-
-1. **PII columns: 14/16 correct** (Ollama: 11/16). `last_name` and `tax_number` are now right.
-2. **All 14 non-PII columns fail with 502** (all-zero distribution), exactly as with Ollama. This confirms the gap is in our contract and parser, not in the model: a strong model also refuses to spread probability over categories that don't fit.
-3. **Remaining PII errors:** `national_id` → `national_id_number` (expected `tckn`); `street_address` has the right category but `pii_likelihood` 0.00.
-
-| Column | Expected | Predicted | P(pred) | pii_likelihood | Outcome | ✓ | Time |
-|---|---|---|---|---|---|---|---|
-| customers.first_name | first_name | first_name | 1.00 | 0.80 | first_name | ✅ | 5s |
-| customers.last_name | last_name | last_name | 1.00 | 0.90 | last_name | ✅ | 2s |
-| customers.email | email_address | email_address | 1.00 | 1.00 | email_address | ✅ | 2s |
-| customers.phone_number | phone_number | phone_number | 1.00 | 0.90 | phone_number | ✅ | 5s |
-| customers.date_of_birth | date_of_birth | date_of_birth | 1.00 | 1.00 | date_of_birth | ✅ | 2s |
-| customers.national_id | tckn | national_id_number | 1.00 | 0.90 | national_id_number | ❌ | 4s |
-| customers.gender | not_pii | 502: all-zero distribution | | | | ❌ | 8s |
-| customers.registration_date | not_pii | 502: all-zero distribution | | | | ❌ | 8s |
-| customers.customer_notes | not_pii | 502: all-zero distribution | | | | ❌ | 8s |
-| customer_addresses.street_address | home_address | home_address | 1.00 | 0.00 | not_pii | ❌ | 3s |
-| customer_addresses.city | home_address / not_pii | 502: all-zero distribution | | | | ❌ | 6s |
-| customer_addresses.postal_code | home_address / not_pii | 502: all-zero distribution | | | | ❌ | 6s |
-| employees.first_name | first_name | first_name | 1.00 | 0.90 | first_name | ✅ | 2s |
-| employees.email | email_address | email_address | 1.00 | 1.00 | email_address | ✅ | 2s |
-| employees.phone | phone_number | phone_number | 1.00 | 0.90 | phone_number | ✅ | 2s |
-| employees.social_security_number | ssn / tckn | ssn | 1.00 | 1.00 | ssn | ✅ | 2s |
-| employees.tax_number | not_pii / national_id_number | national_id_number | 1.00 | 0.90 | national_id_number | ✅ | 2s |
-| employees.bank_account_iban | not_pii | 502: all-zero distribution | | | | ❌ | 8s |
-| employees.salary | not_pii | 502: all-zero distribution | | | | ❌ | 9s |
-| employees.hire_date | not_pii | 502: all-zero distribution | | | | ❌ | 7s |
-| payment_methods.card_number_masked | credit_card_number | credit_card_number | 1.00 | 0.90 | credit_card_number | ✅ | 2s |
-| payment_methods.card_holder_name | full_name | full_name | 1.00 | 0.90 | full_name | ✅ | 2s |
-| payment_methods.bank_name | not_pii | 502: all-zero distribution | | | | ❌ | 6s |
-| orders.order_number | not_pii | 502: all-zero distribution | | | | ❌ | 7s |
-| orders.notes | not_pii | 502: all-zero distribution | | | | ❌ | 7s |
-| audit_logs.ip_address | ip_address | ip_address | 1.00 | 0.90 | ip_address | ✅ | 3s |
-| audit_logs.user_agent | not_pii | 502: all-zero distribution | | | | ❌ | 7s |
-| products.product_name | not_pii | 502: all-zero distribution | | | | ❌ | 9s |
-| products.unit_price | not_pii | 502: all-zero distribution | | | | ❌ | 8s |
-
-**13/29 columns as expected** (sample_count=10)
+**29/29 columns as expected.**
 
 ---
 
