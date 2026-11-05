@@ -2,11 +2,15 @@ import pytest
 
 from app.domain.enums import PiiCategory
 from app.services.checksum_evidence import (
+    EMAIL_WEIGHT,
+    IP_ADDRESS_WEIGHT,
     LUHN_WEIGHT,
     TCKN_CHECKSUM_WEIGHT,
     TCKN_FORMAT_WEIGHT,
     collect_evidence,
     fuse,
+    is_email,
+    is_ip_address,
     is_tckn_format,
     is_valid_luhn_card,
     is_valid_tckn,
@@ -59,6 +63,39 @@ def test_invalid_luhn_card(value):
     assert not is_valid_luhn_card(value)
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["ahmet.yilmaz@email.com", "user+tag@company.co.uk", " ali.veli@company.com "],
+)
+def test_email(value):
+    assert is_email(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["a***********@email.com", "not an email", "user@localhost", "a@b@c.com", "Contact: x@y.com"],
+)
+def test_not_email(value):
+    assert not is_email(value)
+
+
+@pytest.mark.parametrize("value", ["192.168.1.100", "10.0.0.50", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "::1"])
+def test_ip_address(value):
+    assert is_ip_address(value)
+
+
+@pytest.mark.parametrize("value", ["1.2.3", "256.1.1.1", "192.168.1.1/32", "12345678901", "v1.2.3.4", ""])
+def test_not_ip_address(value):
+    assert not is_ip_address(value)
+
+
+def test_email_and_ip_evidence():
+    [email] = collect_evidence(["ahmet.yilmaz@email.com", "fatma.kaya@gmail.com"])
+    assert (email.category, email.check, email.weight) == (PiiCategory.EMAIL_ADDRESS, "email_format", EMAIL_WEIGHT)
+    [ip] = collect_evidence(["192.168.1.100", "10.0.0.50", "172.16.0.10"])
+    assert (ip.category, ip.check, ip.weight) == (PiiCategory.IP_ADDRESS, "ip_address", IP_ADDRESS_WEIGHT)
+
+
 def test_checksum_valid_tckns_give_strong_evidence():
     [evidence] = collect_evidence(VALID_TCKNS + [""])  # empty values are not counted
     assert evidence.category is PiiCategory.TCKN
@@ -86,8 +123,8 @@ def test_luhn_evidence():
     [
         [],
         ["", "  "],
-        ["ahmet.yilmaz@email.com", "fatma.kaya@gmail.com"],
         ["+90 532 123 4567", "+90 533 987 6543"],
+        ["VIP müşteri, mail: a@b.com", "Düzenli müşteri"],  # free text mentioning an email
         ["1234567890", "2345678901"],  # 10-digit tax numbers
         ["10000000146", "x", "y", "z", "w"],  # below the 80% match ratio
         ["4532-1234-5678-9012", "1234 5678 9012 3456"],  # card-shaped, Luhn fails

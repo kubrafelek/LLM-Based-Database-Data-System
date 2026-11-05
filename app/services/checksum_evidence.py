@@ -1,9 +1,14 @@
-"""Deterministic checks (TCKN algorithm, Luhn) on raw samples, fused with the LLM distribution.
+"""Deterministic checks on raw samples (TCKN algorithm, Luhn, email and IP syntax), fused with the
+LLM distribution.
 
+Only categories with a syntactic definition are checked. Names, addresses, phone numbers and
+dates of birth depend on context (a date is not necessarily a birth date), so they stay with the LLM.
 The checks run on the unmasked values inside the system; only match counts leave this module.
 """
 
+import ipaddress
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.domain.enums import PiiCategory
@@ -20,6 +25,9 @@ MIN_MATCH_RATIO = 0.8
 TCKN_CHECKSUM_WEIGHT = 0.6
 TCKN_FORMAT_WEIGHT = 0.3
 LUHN_WEIGHT = 0.6
+# A full email address or a parseable IP address is unambiguous syntax.
+EMAIL_WEIGHT = 0.6
+IP_ADDRESS_WEIGHT = 0.6
 
 # A check for a specific category also explains the generic category it is a case of:
 # an 11-digit TCKN-shaped column the LLM calls "national ID number" is a TCKN column.
@@ -29,12 +37,13 @@ SPECIALIZES = {PiiCategory.TCKN: PiiCategory.NATIONAL_ID_NUMBER}
 TCKN_PATTERN = re.compile(r"[1-9]\d{10}")
 CARD_SEPARATORS = re.compile(r"[ -]")
 CARD_PATTERN = re.compile(r"\d{13,19}")
+EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 
 
 @dataclass(frozen=True)
 class ChecksumEvidence:
     category: PiiCategory
-    check: str  # "tckn_checksum" | "tckn_format" | "luhn"
+    check: str  # "tckn_checksum" | "tckn_format" | "luhn" | "email_format" | "ip_address"
     matched: int
     checked: int
     weight: float
@@ -69,6 +78,27 @@ def is_valid_luhn_card(value: str) -> bool:
     return total % 10 == 0
 
 
+def is_email(value: str) -> bool:
+    return EMAIL_PATTERN.fullmatch(value.strip()) is not None
+
+
+def is_ip_address(value: str) -> bool:
+    """IPv4 in dotted-quad form or IPv6 (inet values are sampled via host(), so no netmask)."""
+    try:
+        ipaddress.ip_address(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
+# Single-tier checks: (category, check name, predicate, weight).
+SIMPLE_CHECKS: list[tuple[PiiCategory, str, Callable[[str], bool], float]] = [
+    (PiiCategory.CREDIT_CARD_NUMBER, "luhn", is_valid_luhn_card, LUHN_WEIGHT),
+    (PiiCategory.EMAIL_ADDRESS, "email_format", is_email, EMAIL_WEIGHT),
+    (PiiCategory.IP_ADDRESS, "ip_address", is_ip_address, IP_ADDRESS_WEIGHT),
+]
+
+
 def collect_evidence(raw_samples: list[str]) -> list[ChecksumEvidence]:
     values = [value for value in raw_samples if value.strip()]
     if not values:
@@ -89,11 +119,10 @@ def collect_evidence(raw_samples: list[str]) -> list[ChecksumEvidence]:
             ChecksumEvidence(PiiCategory.TCKN, "tckn_format", tckn_format, len(values), TCKN_FORMAT_WEIGHT)
         )
 
-    luhn_valid = passes(is_valid_luhn_card)
-    if luhn_valid >= MIN_MATCH_RATIO * len(values):
-        evidence.append(
-            ChecksumEvidence(PiiCategory.CREDIT_CARD_NUMBER, "luhn", luhn_valid, len(values), LUHN_WEIGHT)
-        )
+    for category, check, predicate, weight in SIMPLE_CHECKS:
+        matched = passes(predicate)
+        if matched >= MIN_MATCH_RATIO * len(values):
+            evidence.append(ChecksumEvidence(category, check, matched, len(values), weight))
     return evidence
 
 

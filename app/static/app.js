@@ -25,6 +25,8 @@ const CHECK_LABELS = {
   tckn_checksum: "TCKN check digits",
   tckn_format: "TCKN format (11 digits)",
   luhn: "Luhn checksum",
+  email_format: "Email syntax",
+  ip_address: "IP address syntax",
 };
 // Same cut-off the evaluation script uses to call a column PII.
 const PII_THRESHOLD = 0.5;
@@ -386,7 +388,8 @@ function renderColumnRows(column) {
     { type: "button", class: "btn btn-sm", "data-classify": column.column_id },
     result ? "Re-run" : "Classify"
   );
-  button.addEventListener("click", () => classifyColumn(column, button));
+  // "Re-run" asks for a fresh LLM answer; "Classify" may be served from the cache.
+  button.addEventListener("click", () => classifyColumn(column, button, Boolean(result)));
 
   const row = h(
     "tr",
@@ -415,11 +418,15 @@ function renderColumnRows(column) {
   return [row, detailRow];
 }
 
-async function classifyColumn(column, button) {
+async function classifyColumn(column, button, forceRefresh = false) {
   await busy(button, async () => {
     button.textContent = "…";
     try {
-      const result = await api("POST", "/classify", { column_id: column.column_id, sample_count: state.sampleCount });
+      const result = await api("POST", "/classify", {
+        column_id: column.column_id,
+        sample_count: state.sampleCount,
+        force_refresh: forceRefresh,
+      });
       state.results.set(column.column_id, result);
       const row = document.querySelector(`tr[data-column="${column.column_id}"]`);
       if (row) {
@@ -445,7 +452,8 @@ function resultSummary(result) {
       "span",
       { class: "result" },
       h("span", { class: "badge badge-safe" }, "Not PII"),
-      h("span", { class: "muted small" }, `PII ${pct(result.pii_likelihood)}`)
+      h("span", { class: "muted small" }, `PII ${pct(result.pii_likelihood)}`),
+      result.cached ? h("span", { class: "tag", title: "Same samples and settings as an earlier run; no LLM call" }, "cached") : null
     );
   }
   const p = result.classification[result.predicted_category];
@@ -455,7 +463,8 @@ function resultSummary(result) {
     h("span", { class: "badge badge-pii" }, label(result.predicted_category)),
     h("span", { class: "small" }, pct(p)),
     h("span", { class: "muted small" }, `PII ${pct(result.pii_likelihood)}`),
-    result.checksum_evidence.length ? h("span", { class: "tag tag-check", title: "Checksum evidence applied" }, "✓ check") : null
+    result.checksum_evidence.length ? h("span", { class: "tag tag-check", title: "Checksum evidence applied" }, "✓ check") : null,
+    result.cached ? h("span", { class: "tag", title: "Same samples and settings as an earlier run; no LLM call" }, "cached") : null
   );
 }
 
@@ -496,7 +505,7 @@ function resultDetail(result) {
       stat("Prediction", noFit ? "No category fits" : label(result.predicted_category)),
       stat("PII likelihood", pct(result.pii_likelihood), evidenceApplied ? `LLM ${pct(result.llm_pii_likelihood)}` : null),
       stat("Samples", `${result.sample_count_used} / ${result.sample_count_requested}`, `masking: ${result.masking_mode}`),
-      stat("Model", result.model)
+      stat("Model", result.model, `${result.cached ? "cached, " : ""}${new Date(result.classified_at).toLocaleString()}`)
     ),
     evidenceApplied
       ? h(
@@ -525,7 +534,8 @@ function resultDetail(result) {
           "LLM only"
         )
       : null,
-    result.reasoning ? h("p", { class: "reasoning" }, h("strong", {}, "LLM reasoning: "), result.reasoning) : null
+    result.reasoning ? h("p", { class: "reasoning" }, h("strong", {}, "LLM reasoning: "), result.reasoning) : null,
+    h("p", { class: "muted small" }, "Scores are model confidence, not calibrated probabilities.")
   );
 }
 

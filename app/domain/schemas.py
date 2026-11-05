@@ -75,6 +75,7 @@ class DeleteResponse(BaseModel):
 class ClassifyRequest(BaseModel):
     column_id: UUID
     sample_count: int = Field(default=10, ge=1)
+    force_refresh: bool = Field(default=False, description="Ignore a cached result and call the LLM again.")
 
 
 class ChecksumEvidenceOut(BaseModel):
@@ -97,16 +98,23 @@ class ClassifyResponse(BaseModel):
     masking_mode: MaskingMode
     classification: dict[str, float] = Field(
         description="Probability per PII category; always all 12 categories, summing to 1. "
-        "The LLM distribution fused with checksum evidence. Uniform when no category fits the column."
+        "The LLM distribution fused with checksum evidence. Uniform when no category fits the column. "
+        "These are model confidence scores, not calibrated statistical probabilities."
     )
     predicted_category: PiiCategory | None = Field(
         description="Most likely category, or null when no category fits the column."
     )
-    pii_likelihood: float = Field(description="Probability (0-1) that the column contains PII at all.")
+    pii_likelihood: float = Field(
+        description="Score (0-1) that the column contains PII at all. Not a calibrated probability."
+    )
     llm_classification: dict[str, float] = Field(description="The LLM's distribution before fusion.")
     llm_pii_likelihood: float = Field(description="The LLM's pii_likelihood before fusion.")
     checksum_evidence: list[ChecksumEvidenceOut] = Field(
-        description="Deterministic checks (TCKN algorithm, Luhn) that most samples passed."
+        description="Deterministic checks (TCKN algorithm, Luhn, email / IP syntax) that most samples passed."
     )
     reasoning: str | None
     model: str
+    classified_at: datetime = Field(description="When the LLM produced this result.")
+    cached: bool = Field(
+        description="True when the result was reused: same column, samples, model, prompt and settings."
+    )

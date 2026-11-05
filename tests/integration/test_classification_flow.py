@@ -1,12 +1,15 @@
 import logging
 import uuid
 
+import asyncpg
 import pytest
+from sqlalchemy import func, select
 
 from app.api.dependencies import get_cipher
 from app.core.config import get_settings
 from app.core.exceptions import InvalidRequestError, NotFoundError
 from app.domain.enums import MaskingMode, PiiCategory
+from app.domain.models import ClassificationResult
 from app.domain.schemas import ClassifyRequest
 from app.services import metadata_service
 from app.services.classification_service import classify_column
@@ -42,7 +45,9 @@ async def test_classifies_email_column_with_masked_samples(session, target_reque
     assert result.predicted_category is PiiCategory.EMAIL_ADDRESS
     assert set(result.classification) == {c.value for c in PiiCategory}
     assert abs(sum(result.classification.values()) - 1) < 1e-3
-    assert result.pii_likelihood == 0.97
+    assert result.llm_pii_likelihood == 0.97
+    assert result.pii_likelihood == 0.988  # pulled toward 1 by email_format evidence (weight 0.6)
+    assert [e.check for e in result.checksum_evidence] == ["email_format"]
     assert result.sample_count_used == len(DEMO_EMAILS)
     assert result.masking_mode is MaskingMode.PARTIAL
 
@@ -141,3 +146,84 @@ async def test_checksum_validation_can_be_disabled(session, target_request):
 
     assert result.checksum_evidence == []
     assert result.classification == result.llm_classification
+
+
+async def test_repeated_request_is_served_from_cache(session, target_request):
+    provider = FakeLLMProvider()
+    cid = await column_id(session, target_request, "customers", "email")
+    request = ClassifyRequest(column_id=cid)
+
+    first = await classify(session, request, provider.client())
+    second = await classify(session, request, provider.client())
+
+    assert (first.cached, second.cached) == (False, True)
+    assert len(provider.requests) == 1  # no second LLM call
+    assert second.classification == first.classification
+    assert second.classified_at == first.classified_at
+    stored = await session.scalar(select(func.count()).select_from(ClassificationResult))
+    assert stored == 1
+
+
+async def test_force_refresh_and_other_parameters_bypass_the_cache(session, target_request):
+    provider = FakeLLMProvider()
+    cid = await column_id(session, target_request, "customers", "email")
+    await classify(session, ClassifyRequest(column_id=cid), provider.client())
+
+    refreshed = await classify(session, ClassifyRequest(column_id=cid, force_refresh=True), provider.client())
+    other_count = await classify(session, ClassifyRequest(column_id=cid, sample_count=3), provider.client())
+    unmasked = await classify(
+        session, ClassifyRequest(column_id=cid), provider.client(), sample_masking_mode=MaskingMode.NONE
+    )
+
+    assert not refreshed.cached and not other_count.cached and not unmasked.cached
+    assert len(provider.requests) == 4
+
+
+async def test_changed_data_is_not_served_from_cache(session, target_request):
+    provider = FakeLLMProvider()
+    cid = await column_id(session, target_request, "customers", "email")
+    request = ClassifyRequest(column_id=cid)
+    await classify(session, request, provider.client())
+
+    conn = await asyncpg.connect(
+        host=target_request.host,
+        port=target_request.port,
+        database=target_request.database,
+        user=target_request.username,
+        password=target_request.password.get_secret_value(),
+    )
+    try:
+        await conn.execute(
+            "INSERT INTO customers (first_name, last_name, email) VALUES ('Cache', 'Test', 'cache.test@example.com')"
+        )
+        changed = await classify(session, request, provider.client())
+    finally:
+        await conn.execute("DELETE FROM customers WHERE email = 'cache.test@example.com'")
+        await conn.close()
+
+    assert not changed.cached
+    assert changed.sample_count_used == len(DEMO_EMAILS) + 1
+    assert len(provider.requests) == 2
+
+
+async def test_cache_can_be_disabled(session, target_request):
+    provider = FakeLLMProvider()
+    cid = await column_id(session, target_request, "customers", "email")
+    request = ClassifyRequest(column_id=cid)
+
+    await classify(session, request, provider.client(), classification_cache_ttl_seconds=0)
+    second = await classify(session, request, provider.client(), classification_cache_ttl_seconds=0)
+
+    assert not second.cached
+    assert len(provider.requests) == 2
+    assert await session.scalar(select(func.count()).select_from(ClassificationResult)) == 0
+
+
+async def test_deleting_the_snapshot_deletes_its_cached_results(session, target_request):
+    provider = FakeLLMProvider()
+    cid = await column_id(session, target_request, "customers", "email")
+    result = await classify(session, ClassifyRequest(column_id=cid), provider.client())
+
+    await metadata_service.delete_metadata(session, result.metadata_id)
+
+    assert await session.scalar(select(func.count()).select_from(ClassificationResult)) == 0

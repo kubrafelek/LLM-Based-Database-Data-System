@@ -19,7 +19,7 @@ from sqlalchemy.pool import NullPool
 from app.core.config import get_settings
 from app.domain.schemas import DbConnectionRequest
 
-SYSTEM_TABLES = "users, db_columns, db_tables, db_metadata, db_connections"
+SYSTEM_TABLES = "users, classification_results, db_columns, db_tables, db_metadata, db_connections"
 
 
 @pytest.fixture(scope="session")

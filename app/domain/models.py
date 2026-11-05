@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -102,3 +103,20 @@ class DbColumn(Base):
     ordinal_position: Mapped[int] = mapped_column(Integer)
 
     table: Mapped[DbTable] = relationship(back_populates="columns")
+
+
+class ClassificationResult(Base):
+    """Cached /classify responses. Any change in the samples, model, prompt or settings gives a new cache_key."""
+
+    __tablename__ = "classification_results"
+    __table_args__ = (UniqueConstraint("column_id", "cache_key", name="uq_classification_results_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    column_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("db_columns.id", ondelete="CASCADE"), index=True
+    )
+    cache_key: Mapped[str] = mapped_column(String(64))
+    result: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )

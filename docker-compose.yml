@@ -114,6 +114,22 @@ services:
       test-target-db:
         condition: service_healthy
 
+  # Black-box API contract tests against a running deployment (tests/contract).
+  # Python: docker compose --profile contract run --rm contract-tests
+  # Another implementation: add -e CONTRACT_BASE_URL=http://<service>:<port>
+  contract-tests:
+    profiles: [contract]
+    build:
+      context: .
+      target: test
+    env_file: .env
+    environment:
+      CONTRACT_BASE_URL: ${CONTRACT_BASE_URL:-http://app:8000}
+    command: ["pytest", "-p", "no:cacheprovider", "tests/contract", "-v"]
+    depends_on:
+      app:
+        condition: service_healthy
+
 volumes:
   system-db-data:
   demo-db-data:

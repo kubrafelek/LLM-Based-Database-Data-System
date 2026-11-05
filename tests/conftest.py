@@ -26,13 +26,19 @@ for key, value in TEST_ENV.items():
 
 TESTS_DIR = Path(__file__).parent
 DB_TEST_DIRS = (TESTS_DIR / "integration", TESTS_DIR / "e2e")
+CONTRACT_DIR = TESTS_DIR / "contract"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Integration and e2e tests need real databases; run them with RUN_INTEGRATION=1."""
-    if os.environ.get("RUN_INTEGRATION") == "1":
-        return
-    skip = pytest.mark.skip(reason="needs databases; set RUN_INTEGRATION=1 (see README)")
+    """Integration and e2e tests need real databases; run them with RUN_INTEGRATION=1.
+    Contract tests need a running deployment; run them with CONTRACT_BASE_URL set."""
+    skip_db = pytest.mark.skip(reason="needs databases; set RUN_INTEGRATION=1 (see README)")
+    skip_contract = pytest.mark.skip(reason="needs a running API; set CONTRACT_BASE_URL (see README)")
     for item in items:
-        if any(item.path.is_relative_to(directory) for directory in DB_TEST_DIRS):
-            item.add_marker(skip)
+        if item.path.is_relative_to(CONTRACT_DIR):
+            if not os.environ.get("CONTRACT_BASE_URL"):
+                item.add_marker(skip_contract)
+        elif os.environ.get("RUN_INTEGRATION") != "1" and any(
+            item.path.is_relative_to(directory) for directory in DB_TEST_DIRS
+        ):
+            item.add_marker(skip_db)

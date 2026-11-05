@@ -20,6 +20,9 @@ def test_sample_query_quotes_identifiers_and_binds_limit():
     assert 'FROM "public"."Customers"' in query
     assert 'left("e-mail"::text' in query
     assert query.endswith("LIMIT $1")
+    # Deterministic order (cacheable), not random()
+    assert "ORDER BY md5(value), value" in query
+    assert "random()" not in query
 
 
 def test_sample_query_strips_netmask_from_inet():

@@ -77,7 +77,7 @@ $EDITOR .env   # set LLM_API_KEY, and change every change-me-* value
 | Authentication | `AUTH_USERNAME`, `AUTH_PASSWORD`, `JWT_SECRET_KEY`, `JWT_ALGORITHM`, `JWT_EXPIRE_MINUTES` |
 | Encryption | `ENCRYPTION_KEY` (base64, 32 bytes) |
 | LLM | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TIMEOUT`, `LLM_MAX_RETRIES`, `LLM_JSON_MODE` |
-| Target DB / sampling | `TARGET_DB_CONNECT_TIMEOUT_SECONDS`, `TARGET_DB_STATEMENT_TIMEOUT_MS`, `MAX_SAMPLE_COUNT`, `SAMPLE_MASKING_MODE`, `CHECKSUM_VALIDATION_ENABLED` |
+| Target DB / sampling | `TARGET_DB_CONNECT_TIMEOUT_SECONDS`, `TARGET_DB_STATEMENT_TIMEOUT_MS`, `MAX_SAMPLE_COUNT`, `SAMPLE_MASKING_MODE`, `CHECKSUM_VALIDATION_ENABLED`, `CLASSIFICATION_CACHE_TTL_SECONDS` |
 | Demo DB | `DEMO_DB_NAME`, `DEMO_DB_USER`, `DEMO_DB_PASSWORD`, `DEMO_DB_EXPOSED_PORT` |
 
 ## Docker Compose Startup
@@ -195,15 +195,20 @@ curl -s -X DELETE $API/metadata/$METADATA_ID -H "$AUTH"
   "pii_likelihood": 0.97,
   "llm_classification": { "email_address": 0.95, "full_name": 0.05, "…": 0.0 },
   "llm_pii_likelihood": 0.97,
-  "checksum_evidence": [],
+  "checksum_evidence": [
+    { "category": "email_address", "check": "email_format", "matched": 5, "checked": 5, "weight": 0.6 }
+  ],
   "reasoning": "All samples are email addresses.",
-  "model": "gpt-4o-mini"
+  "model": "gpt-4o-mini",
+  "classified_at": "2026-11-05T15:13:05Z",
+  "cached": false
 }
 ```
 
 - `classification` always contains all 12 categories. It is validated and normalized to sum to 1 (tolerance `1e-3`). It answers "which category does this column most resemble?"
-- `pii_likelihood` answers "is this column PII at all?" Without it, a column such as `unit_price` would have to be reported as some PII class. See [Design decisions](#design-decisions).
-- `classification` / `pii_likelihood` are the final values: the LLM's answer fused with the checksum evidence. `llm_classification` / `llm_pii_likelihood` are the LLM's answer before fusion; `checksum_evidence` lists the checks that applied (see [Checksum validation](#checksum-validation-tckn-luhn)).
+- `pii_likelihood` answers "is this column PII at all?" Without it, a column such as `unit_price` would have to be reported as some PII class. See [Design decisions](#design-decisions--assumptions).
+- `classification` / `pii_likelihood` are the final values: the LLM's answer fused with the checksum evidence. `llm_classification` / `llm_pii_likelihood` are the LLM's answer before fusion; `checksum_evidence` lists the checks that applied (see [Checksum validation](#checksum-validation-tckn-luhn-email-ip)).
+- `cached` is `true` when the result was reused; `classified_at` is when the LLM produced it. Send `"force_refresh": true` in the request to skip the cache.
 - Sample values are never returned.
 
 ### Error responses
@@ -222,26 +227,30 @@ curl -s -X DELETE $API/metadata/$METADATA_ID -H "$AUTH"
 
 1. The column, its table, the snapshot and the stored connection are looked up from `column_id`.
 2. The password is decrypted and a **read-only** connection with a statement timeout is opened.
-3. Up to `sample_count` random **distinct, non-null** values are fetched, cast to text and truncated to 200 characters. `inet` values are taken via `host()`, so there is no netmask. Identifiers are validated and quoted; the limit is a bind parameter.
-4. Samples are masked according to `SAMPLE_MASKING_MODE` (see below).
-5. The LLM gets the category definitions, the column metadata and the JSON-encoded samples between explicit delimiters. It must reply with JSON: `{"pii_likelihood", "classification", "reasoning"}`. Requests use `temperature=0` and JSON mode.
-6. The reply is validated:
+3. Up to `sample_count` **distinct, non-null** values are fetched, cast to text and truncated to 200 characters, ordered by `md5(value)`: a pseudo-random spread that stays the same while the data is unchanged (needed for the cache, and reproducible). `inet` values are taken via `host()`, so there is no netmask. Identifiers are validated and quoted; the limit is a bind parameter.
+4. **Cache lookup** (see [Classification cache](#classification-cache)). On a hit the stored result is returned with `cached: true` and steps 5–8 are skipped.
+5. Samples are masked according to `SAMPLE_MASKING_MODE` (see below).
+6. The LLM gets the category definitions, the column metadata and the JSON-encoded samples between explicit delimiters. It must reply with JSON: `{"pii_likelihood", "classification", "reasoning"}`. Requests use `temperature=0` and JSON mode.
+7. The reply is validated:
    - Every value must be a probability in `[0, 1]`.
    - Unknown categories are dropped and missing ones set to 0.
    - The distribution is rescaled to sum to 1.
    - An invalid reply is re-requested up to twice. Timeouts, 429 and 5xx responses are retried with exponential backoff.
+8. Deterministic checks run on the **raw** samples and are fused into the result (see below). The result is stored in the cache.
 
-7. Deterministic checks run on the **raw** samples and are fused into the result (see below).
+The scores are model confidence, **not calibrated statistical probabilities**; the deterministic checks and the cache make them more stable, not calibrated.
 
-### Checksum validation (TCKN, Luhn)
+### Checksum validation (TCKN, Luhn, email, IP)
 
-The LLM only sees masked samples and is not deterministic: on repeated runs `gpt-4o-mini` scored the demo `customers.national_id` column as `tckn`/`national_id_number` 0.5/0.5, 0.1/0.9 or 0/1. Algorithmic checks on the unmasked values (inside the app; only match counts are kept) correct this:
+The LLM only sees masked samples and is not deterministic: on repeated runs `gpt-4o-mini` scored the demo `customers.national_id` column as `tckn`/`national_id_number` 0.5/0.5, 0.1/0.9 or 0/1. Deterministic checks on the unmasked values (inside the app; only match counts are kept) back the LLM up for the categories that have a syntactic definition. Names, addresses, phone numbers and dates of birth depend on context (a date is not necessarily a birth date), so they are left to the LLM.
 
 | Check | Passes when | Weight |
 |---|---|---|
 | `tckn_checksum` | 11 digits, no leading 0, digit 10 = `(7·(d1+d3+d5+d7+d9) − (d2+d4+d6+d8)) mod 10`, digit 11 = `(d1+…+d10) mod 10` | 0.6 |
 | `tckn_format` | 11 digits, no leading 0 (used when the checksum fails; the case study's own TCKN examples such as `12345678901` fail it) | 0.3 |
 | `luhn` | 13–19 digits (spaces/hyphens allowed) passing the Luhn check | 0.6 |
+| `email_format` | The whole value is an email address (`local@domain.tld`) | 0.6 |
+| `ip_address` | The whole value parses as an IPv4 or IPv6 address | 0.6 |
 
 A check counts as evidence when at least 80% of the non-empty samples pass it. Fusion, per evidence item:
 
@@ -249,6 +258,22 @@ A check counts as evidence when at least 80% of the non-empty samples pass it. F
 2. `final = (1 − weight) · llm + weight · one_hot(category)`; `pii_likelihood` is pulled toward 1 the same way.
 
 An LLM answer for an unrelated category survives: the 11-digit `employees.social_security_number` column stays `ssn` 0.7 / `tckn` 0.3. Disable with `CHECKSUM_VALIDATION_ENABLED=false`.
+
+### Classification cache
+
+Calling the LLM again for an unchanged column costs money and 2–3 s, and can give a different answer. A result is stored in `classification_results` and reused when **all** of these are unchanged:
+
+| Part of the cache key | Why |
+|---|---|
+| `column_id`, `sample_count` | Same column (snapshot), same request |
+| Fingerprint of the sample values | Data unchanged. HMAC-SHA256 keyed with `ENCRYPTION_KEY`, so it cannot be brute-forced back to short values such as TCKNs; raw values are never stored |
+| `LLM_BASE_URL`, `LLM_MODEL`, system prompt hash, logic version | Same model and prompt |
+| `SAMPLE_MASKING_MODE`, `CHECKSUM_VALIDATION_ENABLED` | Same settings |
+
+- The target database is still queried on every request: the fresh samples are how the cache knows the data is unchanged. A cache hit takes ~30 ms instead of ~3 s.
+- `"force_refresh": true` skips the lookup and replaces the stored result (the UI's **Re-run** button does this).
+- Results expire after `CLASSIFICATION_CACHE_TTL_SECONDS` (default 86400); `0` disables the cache.
+- Deleting a snapshot deletes its cached results (`ON DELETE CASCADE`).
 
 ### Sample masking
 
@@ -262,15 +287,16 @@ Masking trades accuracy for privacy. `partial` keeps formats recognizable but le
 
 ## Running Tests
 
-Tests are split into three levels:
+Tests are split into four levels:
 
 | Level | Scope | Needs |
 |---|---|---|
-| `tests/unit` | Security, masking, parser, checksum checks + fusion, prompts, LLM client (mocked HTTP), SQL building, HTTP guards/validation, UI serving | Nothing |
+| `tests/unit` | Security, masking, parser, checksum checks + fusion, cache key, prompts, LLM client (mocked HTTP), SQL building, HTTP guards/validation, UI serving | Nothing |
 | `tests/integration` | Auth service, metadata extraction/persistence/deletion, classification flow against real PostgreSQL | Test DBs |
 | `tests/e2e` | Full API flow: auth → extract → list → detail → classify → delete | Test DBs |
+| `tests/contract` | Black-box API contract over HTTP only (no imports from `app`): auth, extraction, list/detail, validation, checksum rules, cache, delete. Meant to be run unchanged against the Java port | A running deployment + real LLM |
 
-The LLM is always mocked, so tests never call a live provider. All three levels run with one command, using dedicated throwaway databases (tmpfs) seeded with the demo script:
+In unit, integration and e2e tests the LLM is mocked, so they never call a live provider. These three levels run with one command, using dedicated throwaway databases (tmpfs) seeded with the demo script:
 
 ```bash
 docker compose --profile test run --build --rm tests
@@ -286,6 +312,18 @@ pytest tests/unit
 ```
 
 Integration and e2e tests are skipped unless `RUN_INTEGRATION=1` is set. They also need `SYSTEM_DB_*` and `TEST_TARGET_DB_*` variables pointing at disposable databases, as set in the compose `tests` service.
+
+### Contract tests (same tests for Python and Java)
+
+The contract suite runs against a live deployment and the demo database, with the real LLM. It only asserts rules that hold for any LLM answer (structure, status codes, checksum effects, cache, delete semantics), so it can verify any implementation of the API:
+
+```bash
+docker compose up -d
+docker compose --profile contract run --build --rm contract-tests                                  # Python service
+docker compose --profile contract run --build --rm -e CONTRACT_BASE_URL=http://<java-service>:<port> contract-tests   # Java port
+```
+
+Without `CONTRACT_BASE_URL` the suite is skipped, so the default test run is unaffected. It creates its own snapshots and deletes them; it makes about 10 LLM calls.
 
 ## LLM Provider Configuration
 
@@ -345,11 +383,24 @@ Notes:
 - **SSRF.** `POST /db/metadata` makes the server connect to a caller-supplied host/port. It requires authentication. Production deployments should also restrict egress or allow-list targets.
 - Generate fresh `JWT_SECRET_KEY` / `ENCRYPTION_KEY` values and change every `change-me-*` value. Changing `ENCRYPTION_KEY` makes stored connections unreadable.
 
-## Design Decisions
+## Design Decisions & Assumptions
 
-- **`pii_likelihood` in addition to the 12 categories.** The spec requires a distribution over exactly 12 categories that sums to 1. That alone cannot express "not PII". The extra field keeps the required format and still reports non-PII columns honestly.
+The case study leaves several choices to the developer. They are answered here.
+
+| Question | Decision | Why |
+|---|---|---|
+| Re-extracting metadata: update the old record or create a new snapshot? | **New snapshot** every time. The connection row is reused (same host/port/database/username) and its encrypted password refreshed | Snapshots are immutable history: classification results and column IDs of an older snapshot stay valid. Deleting a snapshot never deletes the connection |
+| Is the column UUID regenerated on every extraction? | **Yes**, every snapshot gets new column IDs | A column ID identifies a column *in a snapshot*; reusing IDs would mix results across schema versions. Cached results are tied to the column ID and deleted with the snapshot |
+| How are non-PII columns represented? | The 12-category `classification` always sums to 1 (as the spec requires) and answers "which category does it most resemble". A separate `pii_likelihood` answers "is it PII at all". When nothing fits: uniform distribution, `predicted_category: null`, `pii_likelihood: 0`; the UI shows "Not PII" below 0.5 | Without the extra field, a column like `unit_price` would have to be reported as some PII class |
+| Can a column contain more than one PII category? | The **distribution** expresses mixtures (e.g. a notes column with emails and phone numbers spreads its mass); `predicted_category` is the single most likely one. Deterministic checks only fire when ≥ 80% of the samples match one category, so they never force a single label on mixed columns | The spec asks for one probability distribution per column; multi-label output would change the contract |
+| How are samples anonymized before they reach the LLM provider? | `SAMPLE_MASKING_MODE`: `partial` (default) masks email local parts and middle digits of numbers with ≥ 6 digits, keeping the format; `strict` keeps only the shape; `none` sends values as is. Deterministic checks run on the raw values inside the app; only counts leave it | Classification needs the format, not the identity. For real personal data a self-hosted model (Ollama profile) avoids sending anything out |
+| Are the scores probabilities? | They are **model confidence scores, not calibrated probabilities**, stabilized by deterministic checks and the cache | No labeled data to calibrate against; the API docs and UI say so |
+| How is repeated classification of the same column handled? | Cached on column, samples, model, prompt and settings; reused for `CLASSIFICATION_CACHE_TTL_SECONDS` (see [Classification cache](#classification-cache)) | Cost, latency, and a stable answer for unchanged data |
+| How are the Python and Java implementations kept equivalent? | One black-box contract suite (`tests/contract`) and the evaluation script, both HTTP only, run against both | Same request → same contract and business rules |
+
+Other decisions:
+
 - **Auth accepts a JSON body and HTTP Basic.** The spec defines a JSON body; the case study asks for Basic authentication. Both are supported.
-- **Reusable connections.** Extracting the same host/port/database/username again reuses the connection row and refreshes its encrypted password. Every extraction creates a new snapshot with new column IDs. Deleting a snapshot never deletes the connection.
 - **Metadata scope.** Tables, partitioned tables, views, materialized views and foreign tables in all non-system schemas, or one schema via `schema_name`. Partitions are folded into their parent. Types come from `format_type()`, e.g. `character varying(50)`, `numeric(10,2)`.
 - **Masked card numbers** (`****-****-****-1234`) are described to the LLM as credit card data. The goal is finding columns that hold card data.
 - **Credential format.** AES-GCM is stored as `base64(nonce || ciphertext || tag)`, the same layout as Java's `AES/GCM/NoPadding`, so the Java port can share the system DB.
@@ -359,10 +410,11 @@ Notes:
 
 ## Known Limitations
 
-- `ORDER BY random()` over distinct values scans the whole column. For very large tables, `TABLESAMPLE` would be cheaper.
+- Sampling (`DISTINCT … ORDER BY md5(value)`) scans the whole column. For very large tables, `TABLESAMPLE` would be cheaper. The deterministic order also means a large column is always judged on the same subset of its values (until the data changes).
 - One column per classification request. A batch endpoint, or a whole-table prompt where columns give each other context, would cut cost and improve accuracy.
 - The `tckn_format` check (no checksum) also matches other 11-digit national IDs (e.g. Polish PESEL); those columns get pulled toward `tckn`. Masked card numbers (`****-****-****-1234`) cannot be Luhn-checked. Fusion weights are hand-set, not calibrated.
 - `pii_likelihood` and the distribution are LLM estimates and are not calibrated.
+- A cache hit still opens a connection to the target database (to fingerprint the samples).
 - There is one bootstrap admin user and no user-management endpoints.
 - The body size limit relies on `Content-Length`. Chunked uploads are not counted; a reverse proxy should enforce a hard limit.
 - Migration `0002` is irreversible.

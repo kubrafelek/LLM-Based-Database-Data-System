@@ -160,8 +160,10 @@ async def extract_tables(conn: asyncpg.Connection, schema_name: str | None = Non
 
 
 def build_sample_query(schema_name: str, table_name: str, column_name: str, data_type: str) -> str:
-    """Random distinct non-null values, cast to text so every type (inet, jsonb, date...) works.
+    """Distinct non-null values, cast to text so every type (inet, jsonb, date...) works.
 
+    Ordered by md5(value): a pseudo-random spread over the values that is stable while the data
+    is unchanged, so classification results can be cached on the sample set (and are reproducible).
     Identifiers are validated and quoted; the limit is a bind parameter.
     """
     column = quote_ident(column_name)
@@ -172,7 +174,7 @@ def build_sample_query(schema_name: str, table_name: str, column_name: str, data
         f"SELECT value FROM ("
         f"SELECT DISTINCT left({value}, {MAX_VALUE_LENGTH}) AS value "
         f"FROM {source} WHERE {column} IS NOT NULL"
-        f") AS distinct_values ORDER BY random() LIMIT $1"
+        f") AS distinct_values ORDER BY md5(value), value LIMIT $1"
     )
 
 

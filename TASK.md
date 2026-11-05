@@ -10,19 +10,19 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 ## 1. Current Status
 
 **Last updated:** 2026-11-05
-**Current phase:** Python implementation (Task 1) complete, with checksum fusion and a web UI; verified with a real LLM (29/29). Next: Java migration (Task 2).
+**Current phase:** Python implementation (Task 1) complete: deterministic checks, classification cache, black-box contract suite and web UI; verified with a real LLM (29/29). Next: Java migration (Task 2).
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 1 | Requirement analysis & architecture | ✅ | Spec §10 layers: `api/routes`, `core`, `domain`, `services`, `repositories`, `infrastructure/{database,llm}` |
 | 2 | Repository & environment setup | ✅ | Docker, compose, `.env.example` (spec §12 names), `.gitignore` |
-| 3 | Database schema design | ✅ | `users`; `db_connections` 1─N `db_metadata` 1─N `db_tables` 1─N `db_columns`; FKs + indexes; migrations `0001`, `0002` |
+| 3 | Database schema design | ✅ | `users`; `db_connections` 1─N `db_metadata` 1─N `db_tables` 1─N `db_columns` 1─N `classification_results`; FKs + indexes; migrations `0001`–`0003` |
 | 4 | Authentication | ✅ | `POST /api/v1/auth` (JSON body or Basic) → JWT; users table with Argon2id; admin seeded from `.env` |
 | 5 | Metadata extraction | ✅ | `pg_catalog` inspection, optional `schema_name` filter, generic error messages |
 | 6 | Metadata CRUD | ✅ | Under `/api/v1` (plus PDF root-path aliases); delete keeps the connection; pagination |
-| 7 | LLM classification engine | ✅ | `httpx` `LLMClient`, masking, 12-key distribution + `pii_likelihood`, validation/normalization, retries, TCKN / Luhn checksum fusion |
+| 7 | LLM classification engine | ✅ | `httpx` `LLMClient`, masking, 12-key distribution + `pii_likelihood`, validation/normalization, retries, deterministic checks (TCKN, Luhn, email, IP) fused into the result, result cache |
 | 8 | Security & validation | ✅ | All spec §9 controls (see §3) |
-| 9 | Testing & QA | ✅ | 150 tests (126 unit, 19 integration, 5 e2e), see §6 |
+| 9 | Testing & QA | ✅ | 184 tests (155 unit, 24 integration, 5 e2e) + 37 black-box contract tests, see §6 |
 | 10 | Docker & documentation | ✅ | Compose (app, system-db, demo-db + test profile); README covers spec §13; web UI at `/ui/` |
 | 11 | Java migration (AI-assisted) | ⬜ | Not started |
 
@@ -41,8 +41,10 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 - [x] Classification probabilities are validated
 - [x] Database credentials are encrypted at rest (AES-256-GCM)
 - [x] Sensitive samples are masked before they are sent to the LLM (`SAMPLE_MASKING_MODE`, default `partial`)
-- [x] TCKN / Luhn checks are combined with the LLM output
-- [x] Unit, integration and e2e tests pass (150)
+- [x] Deterministic checks (TCKN, Luhn, email, IP) are combined with the LLM output; scores documented as not calibrated
+- [x] Classification results are cached while samples and settings are unchanged
+- [x] Unit, integration and e2e tests pass (184)
+- [x] Black-box contract suite passes against the Python service (37) and is ready for the Java port
 - [x] Web UI for all six services (`/ui/`)
 - [x] Docker Compose starts the application
 - [x] `.env.example` and README are complete
@@ -89,7 +91,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | 5. `DELETE /metadata/{id}`: deletion status | ✅ | `{"metadata_id": …, "deleted": true}` |
 | 6. `POST /classify`: column ID + sample count (default 10) | ✅ | Default 10, max `MAX_SAMPLE_COUNT` |
 | 6. Finds metadata + connection from the column ID; extracts samples | ✅ | Integration + e2e tests on the demo data |
-| 6. LLM classification; probability distribution over predefined classes | ✅ | `gpt-4o-mini`: 29/29 (§7) |
+| 6. LLM classification; probability distribution over predefined classes | ✅ | `gpt-4o-mini`: 29/29 (§8) |
 | 12 PII categories | ✅ | All 12 always returned |
 | All config in `.env` | ✅ | `app/core/config.py` reads only env (test-profile throwaway DB credentials are fixed in compose) |
 | Working Docker setup, README, `.env.example` | ✅ | |
@@ -111,49 +113,61 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | D8 | PDF paths vs. `/api/v1` | PDF root paths (`/auth`, `/metadata`, …) are served as aliases with the same handlers, hidden from OpenAPI |
 | D9 | LLM provider | OpenAI `gpt-4o-mini` for verification. Ollama (`llama3.1`, compose profile `local-llm`) stays as a documented local option; on CPU it was slow and followed the JSON contract poorly (Run 1) |
 | D10 | TCKN / Luhn checks | Run on the raw samples inside the app (only match counts leave the module) and fused into the LLM distribution. TCKN evidence first moves `national_id_number` probability to `tckn` (specific absorbs generic), then `(1−w)·llm + w·one_hot`. Weights: TCKN checksum 0.6, TCKN format only 0.3, Luhn 0.6; ≥ 80% of non-empty samples must pass. The response also returns the LLM-only values and the applied evidence. Toggle: `CHECKSUM_VALIDATION_ENABLED` |
+| D12 | Email / IP checks | Added to the deterministic checks: `email_format` (whole value is `local@domain.tld`) and `ip_address` (parses as IPv4/IPv6), weight 0.6 each. Only categories with a syntactic definition are checked; names, addresses, phones and dates of birth depend on context and stay with the LLM. Scores are documented as model confidence, not calibrated probabilities (API schema, UI, README) |
+| D13 | Classification cache | Results stored in `classification_results` (FK `db_columns`, `ON DELETE CASCADE`), keyed on column, `sample_count`, an HMAC-SHA256 fingerprint of the raw samples (key `ENCRYPTION_KEY`), LLM base URL + model, system-prompt hash, logic version, masking mode and checksum flag. Sampling changed from `ORDER BY random()` to `ORDER BY md5(value), value` so unchanged data gives the same samples. TTL `CLASSIFICATION_CACHE_TTL_SECONDS` (default 86400, `0` = off); `force_refresh` bypasses. Response gained `cached`, `classified_at` |
+| D14 | Python ↔ Java equivalence | `tests/contract`: HTTP-only pytest suite (no `app` imports), run via the compose `contract` profile against `CONTRACT_BASE_URL`. Asserts only LLM-independent rules (structure, status codes, checksum effects, cache, delete semantics) |
+| D15 | Open questions answered in README "Design Decisions & Assumptions" | New snapshot per extraction (connection reused); new column UUIDs per snapshot; non-PII via `pii_likelihood` + `predicted_category: null`; multiple categories expressed by the distribution, single `predicted_category`, checks need ≥ 80% of samples so mixed columns aren't forced; anonymization via `SAMPLE_MASKING_MODE` |
 | D11 | Web UI | Static HTML/JS/CSS in `app/static`, served at `/ui/` (`/` redirects). No build step or CDN; same origin, so no CORS. Strict CSP response header; token in `sessionStorage` |
 
 ---
 
 ## 5. Next Steps
 
-1. Java migration (Task 2): Spring Boot port with the same endpoints, JSON contract, encryption, masking and checksum rules.
+1. Java migration (Task 2): Spring Boot port with the same endpoints, JSON contract, encryption, masking, checksum rules and cache; can share the system DB schema (migrations `0001`–`0003`).
 2. `docs/MIGRATION_REPORT.md`: per step, the original code, Java equivalent, AI tool, exact prompt, manual corrections, tests and result.
-3. Verify the Java port with the same HTTP-only evaluation script (`scripts/evaluate_classification.py`).
+3. Verify the Java port with the same HTTP-only checks: `tests/contract` (`CONTRACT_BASE_URL=…`) and `scripts/evaluate_classification.py`.
 
 ---
 
 ## 6. Test Cases
 
-Run with `docker compose --profile test run --rm tests`. Integration and e2e tests use dedicated tmpfs PostgreSQL databases seeded with the demo script; the LLM is mocked with `httpx.MockTransport` (`tests/fakes.py`).
-**Total: 150 passed** (counts include parametrized cases).
+Unit, integration and e2e: `docker compose --profile test run --rm tests`. Integration and e2e tests use dedicated tmpfs PostgreSQL databases seeded with the demo script; the LLM is mocked with `httpx.MockTransport` (`tests/fakes.py`).
+Contract: `docker compose --profile contract run --rm contract-tests` against a running deployment and the real LLM.
+**Total: 184 passed + 37 contract passed** (counts include parametrized cases).
 
-### Unit (126)
+### Unit (155)
 
 | File | # | Cases |
 |---|---|---|
 | `test_api.py` | 22 | `/health`; the 5 protected endpoints return 401 without auth; invalid bearer token → 401; auth without credentials → 401 + `WWW-Authenticate: Basic`; OpenAPI lists only `/api/v1` paths; the 6 PDF root-path aliases exist; `column_id` and `sample_count` validation (422); oversized body → 413; CORS off by default; `/` → `/ui/`, UI assets served with the CSP header |
-| `test_checksum_evidence.py` | 36 | Valid TCKNs (4); invalid TCKNs: wrong check digits, leading 0, 10 digits, separators, empty (6); format check ignores check digits; valid / invalid Luhn cards incl. masked and wrong-separator values (4 + 5); strong evidence for checksum-valid TCKNs; weak evidence for the demo TCKNs (format only); Luhn evidence; no evidence for 7 non-matching sample sets (emails, phones, 10-digit tax numbers, < 80% match, Luhn-failing cards); fusion: the three observed LLM replies for `national_id` (0.5/0.5, 0.1/0.9, 0/1) all end at `tckn` 1.0; `ssn` survives on an 11-digit column (0.7 / 0.3); Luhn pulls toward credit card; no evidence = identity |
+| `test_checksum_evidence.py` | 55 | Valid TCKNs (4); invalid TCKNs: wrong check digits, leading 0, 10 digits, separators, empty (6); format check ignores check digits; valid / invalid Luhn cards incl. masked and wrong-separator values (4 + 5); valid / invalid emails (3 + 5, incl. masked and embedded in text); valid / invalid IP addresses (4 + 6, incl. 3 octets, `256.x`, netmask suffix, 11-digit number); email and IP evidence; strong evidence for checksum-valid TCKNs; weak evidence for the demo TCKNs (format only); Luhn evidence; no evidence for 7 non-matching sample sets (phones, free text mentioning an email, 10-digit tax numbers, < 80% match, Luhn-failing cards); fusion: the three observed LLM replies for `national_id` (0.5/0.5, 0.1/0.9, 0/1) all end at `tckn` 1.0; `ssn` survives on an 11-digit column (0.7 / 0.3); Luhn pulls toward credit card; no evidence = identity |
+| `test_classification_cache.py` | 10 | Key stable and independent of sample order; a new key when any input changes (sample values, extra sample, column, `sample_count`, model, LLM base URL, masking mode, checksum flag: 8 cases); sample fingerprint is keyed (HMAC) and does not contain raw values |
 | `test_classification_parser.py` | 18 | Missing categories filled and rescaled; sum within tolerance; 6 unusable inputs rejected; all-zero → "no category fits" (uniform, `pii_likelihood` 0); 6 invalid `pii_likelihood` values rejected; non-string reasoning ignored |
 | `test_llm_client.py` | 16 | OpenAI-compatible request body (`temperature=0`, JSON mode); JSON mode can be disabled; retries on transient failures, gives up after max retries; no retry on 4xx; 429 rate limit retried; `insufficient_quota` fails fast with a clear message (2); empty API key sends no `Authorization` header; re-request when the parser rejects a reply; code fences tolerated; 3 invalid contents rejected; unexpected response shape rejected |
 | `test_prompts.py` | 4 | System prompt lists all 12 categories; samples JSON-encoded between markers; masking described; prompt without samples |
 | `test_sample_sanitizer.py` | 13 | `none` returns values unchanged; 9 partial-masking cases (email, TCKN, phone, date, IP, card masked; already-masked card, address and name unchanged); 3 strict cases (shape only) |
 | `test_security.py` | 10 | AES-GCM round trip with a random nonce; wrong key, tampered ciphertext and 2 invalid keys rejected; JWT round trip; expired and foreign-key tokens rejected; Argon2id hash verifies; malformed hash rejected |
-| `test_target_database.py` | 7 | Identifier quoting escapes `"`; 3 invalid identifiers rejected; sample query quotes identifiers and binds `LIMIT`; `inet` sampled via `host()` (no netmask); `ConnectionInfo` repr hides the password |
+| `test_target_database.py` | 7 | Identifier quoting escapes `"`; 3 invalid identifiers rejected; sample query quotes identifiers, binds `LIMIT` and orders deterministically by `md5(value)` (no `random()`); `inet` sampled via `host()` (no netmask); `ConnectionInfo` repr hides the password |
 
-### Integration (19)
+### Integration (24)
 
 | File | # | Cases |
 |---|---|---|
 | `test_auth_service.py` | 4 | Authenticate valid/invalid users; admin seeding stores an Argon2 hash, is idempotent and applies a changed password |
 | `test_metadata_service.py` | 6 | Demo schema extracted and persisted (8 tables + 1 view, column UUIDs); password encrypted at rest; list / get / delete; schema filter; snapshots reuse one connection; bad credentials give a generic error and no secret in the logs |
-| `test_classification_flow.py` | 9 | Email column classified with masked samples (no raw email in the prompt or the logs); "no category fits" accepted on the first reply; masking can be disabled; `sample_count` limits the samples; above `MAX_SAMPLE_COUNT` rejected; unknown column → 404; empty column classified from metadata only; demo `national_id` with a 0.5/0.5 LLM tie → `tckn` 1.0 via `tckn_format` 5/5 (raw values not sent to the LLM); checksum validation can be disabled |
+| `test_classification_flow.py` | 14 | Email column classified with masked samples (no raw email in the prompt or the logs; `email_format` evidence lifts `pii_likelihood` 0.97 → 0.988); "no category fits" accepted on the first reply; masking can be disabled; `sample_count` limits the samples; above `MAX_SAMPLE_COUNT` rejected; unknown column → 404; empty column classified from metadata only; demo `national_id` with a 0.5/0.5 LLM tie → `tckn` 1.0 via `tckn_format` 5/5 (raw values not sent to the LLM); checksum validation can be disabled; **cache:** repeated request served from cache (one LLM call, same result and `classified_at`, one stored row); `force_refresh`, another `sample_count` and another masking mode bypass it; inserting a row into the target table gives a miss (row removed afterwards); TTL `0` disables caching; deleting the snapshot deletes its cached results |
 
 ### End-to-end (5)
 
 | File | # | Cases |
 |---|---|---|
 | `test_full_flow.py` | 5 | Full business flow over HTTP (auth → extract → list → detail → classify → delete); Basic credentials accepted; invalid credentials rejected; PDF root paths work as aliases; unreachable target DB → generic 400 |
+
+### Contract (37, real deployment + real LLM)
+
+| File | # | Cases |
+|---|---|---|
+| `tests/contract/test_api_contract.py` | 37 | **Auth:** JSON and Basic login return a bearer token; wrong password 401; 5 protected endpoints reject missing and invalid tokens; PDF root-path aliases; 1 MB body → 413. **Extraction:** 9 demo relations, unique UUID column IDs, `table_count`; 4 PostgreSQL types (`character varying(100)`, `date`, `numeric(10,2)`, `inet`); password never returned; wrong credentials → generic 400; invalid input → 422. **List / detail:** snapshot listed with name, count, date; detail column IDs equal the extraction; unknown 404, malformed 422. **Classify:** response shape (12 keys, sum 1, default `sample_count` 10, `cached`, `classified_at`); sample values never returned; column ID validation (404 / 422 / 422); `sample_count` 0, −1, 101 → 422; TCKN rule (`tckn_format` 5/5, `national_id_number` 0, `tckn` ≥ 0.3); email and IP evidence give ≥ 0.6 and the prediction; no evidence (distribution = LLM) for prices, masked cards, names; cache hit then `force_refresh` miss. **Delete:** re-extraction reuses the connection with a new snapshot; delete status; then 404 on get, delete and classify; other snapshot untouched |
 
 ### Classification evaluation (real LLM)
 
@@ -200,6 +214,13 @@ Run with `docker compose --profile test run --rm tests`. Integration and e2e tes
 - CSP sent as a response header (`frame-ancestors` is ignored in a `<meta>` tag); bar widths set via CSSOM, so no `'unsafe-inline'` is needed. All server data rendered with `textContent`.
 - Verified in headless Chrome (desktop light/dark, 390 px mobile): no console errors, no horizontal overflow.
 
+### Senior review follow-ups (Steps 22–25)
+- **Deterministic checks (D12):** `is_email`, `is_ip_address` added to `checksum_evidence.py`; single-tier checks moved into a `SIMPLE_CHECKS` table. Calibration disclaimer added to the `classification` / `pii_likelihood` schema descriptions and the UI result panel.
+- **Cache (D13):** model `ClassificationResult` + migration `0003`; `repositories/classification_repository.py` (fresh lookup, upsert); `services/classification_cache.py` (key, keyed fingerprint); `classification_service` looks up after sampling and stores after fusion. Deterministic sampling order. Request `force_refresh`; response `cached`, `classified_at`; env `CLASSIFICATION_CACHE_TTL_SECONDS`. UI: **Re-run** sends `force_refresh`, cached results are tagged. Measured on the live stack: miss ~3 s, hit ~30 ms.
+- **Contract suite (D14):** `tests/contract` + compose service `contract-tests` (profile `contract`); skipped unless `CONTRACT_BASE_URL` is set. 37/37 against the Python service.
+- **README (D15):** "Design Decisions & Assumptions" table answering the open questions; sections for the cache, the new checks and contract tests.
+- Evaluation after these changes: still 29/29 (email and IP now also carry evidence: `pii_likelihood` 0.96).
+
 ---
 
 ## 8. Classification Evaluation Results
@@ -212,14 +233,15 @@ Run with `docker compose --profile test run --rm tests`. Integration and e2e tes
 | 2 | `gpt-4o-mini` | Before robustness fixes | 13/29 | PII 14/16 correct; all 14 non-PII columns → 502: the gap is in the contract, not the model |
 | 3 | `gpt-4o-mini` | Robustness fixes | 28/29 | Non-PII 14/14; only miss `national_id` → `national_id_number` |
 | 4 | `gpt-4o-mini` | + checksum fusion (D10) | **29/29** | `national_id` → `tckn` 1.00; `social_security_number` stays `ssn` 0.70 |
+| 5 | `gpt-4o-mini` | + email / IP checks, deterministic sampling, cache | **29/29** | `email`, `ip_address` carry evidence (`pii_likelihood` 0.96) |
 
-### Run 4 (current)
+### Run 5 (current)
 
 | Column | Expected | Predicted | P(pred) | pii_likelihood | Outcome | ✓ |
 |---|---|---|---|---|---|---|
 | customers.first_name | first_name | first_name | 1.00 | 0.90 | first_name | ✅ |
 | customers.last_name | last_name | last_name | 1.00 | 0.90 | last_name | ✅ |
-| customers.email | email_address | email_address | 1.00 | 0.90 | email_address | ✅ |
+| customers.email | email_address | email_address | 1.00 | 0.96 | email_address | ✅ |
 | customers.phone_number | phone_number | phone_number | 1.00 | 0.90 | phone_number | ✅ |
 | customers.date_of_birth | date_of_birth | date_of_birth | 1.00 | 0.90 | date_of_birth | ✅ |
 | customers.national_id | tckn | tckn | 1.00 | 0.93 | tckn | ✅ |
@@ -230,7 +252,7 @@ Run with `docker compose --profile test run --rm tests`. Integration and e2e tes
 | customer_addresses.city | home_address / not_pii | (none) | – | 0.00 | not_pii | ✅ |
 | customer_addresses.postal_code | home_address / not_pii | (none) | – | 0.00 | not_pii | ✅ |
 | employees.first_name | first_name | first_name | 1.00 | 0.90 | first_name | ✅ |
-| employees.email | email_address | email_address | 1.00 | 0.90 | email_address | ✅ |
+| employees.email | email_address | email_address | 1.00 | 0.96 | email_address | ✅ |
 | employees.phone | phone_number | phone_number | 1.00 | 0.90 | phone_number | ✅ |
 | employees.social_security_number | ssn / tckn | ssn | 0.70 | 0.93 | ssn | ✅ |
 | employees.tax_number | not_pii / national_id_number | (none) | – | 0.00 | not_pii | ✅ |
@@ -238,11 +260,11 @@ Run with `docker compose --profile test run --rm tests`. Integration and e2e tes
 | employees.salary | not_pii | (none) | – | 0.00 | not_pii | ✅ |
 | employees.hire_date | not_pii | (none) | – | 0.00 | not_pii | ✅ |
 | payment_methods.card_number_masked | credit_card_number | credit_card_number | 1.00 | 0.90 | credit_card_number | ✅ |
-| payment_methods.card_holder_name | full_name | full_name | 1.00 | 0.90 | full_name | ✅ |
+| payment_methods.card_holder_name | full_name | full_name | 0.80 | 0.90 | full_name | ✅ |
 | payment_methods.bank_name | not_pii | (none) | – | 0.00 | not_pii | ✅ |
 | orders.order_number | not_pii | (none) | – | 0.00 | not_pii | ✅ |
 | orders.notes | not_pii | (none) | – | 0.00 | not_pii | ✅ |
-| audit_logs.ip_address | ip_address | ip_address | 1.00 | 0.90 | ip_address | ✅ |
+| audit_logs.ip_address | ip_address | ip_address | 1.00 | 0.96 | ip_address | ✅ |
 | audit_logs.user_agent | not_pii | (none) | – | 0.00 | not_pii | ✅ |
 | products.product_name | not_pii | (none) | – | 0.00 | not_pii | ✅ |
 | products.unit_price | not_pii | (none) | – | 0.00 | not_pii | ✅ |

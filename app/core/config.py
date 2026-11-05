@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     sample_masking_mode: MaskingMode = MaskingMode.PARTIAL
     # Fuse TCKN / Luhn checks on the raw samples into the LLM distribution
     checksum_validation_enabled: bool = True
+    # Reuse a /classify result while the samples and settings are unchanged; 0 disables the cache
+    classification_cache_ttl_seconds: int = 86400
 
     @property
     def cors_origins(self) -> list[str]:
