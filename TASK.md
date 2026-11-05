@@ -15,7 +15,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | # | Phase | Status | Notes |
 |---|---|---|---|
 | 1 | Requirement analysis & architecture | ✅ | Spec §10 layers: `api/routes`, `core`, `domain`, `services`, `repositories`, `infrastructure/{database,llm}` |
-| 2 | Repository & environment setup | ✅ | Docker, compose, `.env.example` (spec §12 names), `.gitignore`; git repo on `main`, remote `git@github.com:kubrafelek/LLM-Based-Database-Data-D-scovery-System.git` |
+| 2 | Repository & environment setup | ✅ | Docker, compose, `.env.example` (spec §12 names), `.gitignore`; git repo on `main`, pushed to `https://github.com/kubrafelek/LLM-Based-Database-Data-D-scovery-System` |
 | 3 | Database schema design | ✅ | `users`; `db_connections` 1─N `db_metadata` 1─N `db_tables` 1─N `db_columns`; FKs + indexes; migration `0002` with data migration (tested) |
 | 4 | Authentication | ✅ | `POST /api/v1/auth` (JSON body or Basic) → JWT; users table with Argon2id; admin seeded from `.env` |
 | 5 | Metadata extraction | ✅ | `pg_catalog` inspection, optional `schema_name` filter, generic error messages |
@@ -130,7 +130,7 @@ Each row was verified by calling the running stack and by the test suite.
 1. ~~Robustness fixes from Run 1~~ ✅ Verified in Run 3: 28/29.
 2. ~~TCKN / Luhn checksum fusion~~ ✅ (D10). Run 4: 29/29.
 3. ~~Web UI~~ ✅ (D11).
-4. ~~`git init` + first commit~~ ✅ (Step 23). Push to GitHub: done by the user (this environment has no GitHub credentials).
+4. ~~`git init` + first commit + push~~ ✅ (Steps 23–24).
 5. Java migration (Phase 11) + `docs/MIGRATION_REPORT.md`: per step, the original code, Java equivalent, AI tool, exact prompt, manual corrections, tests and result.
 
 ---
@@ -231,6 +231,7 @@ Each row was verified by calling the running stack and by the test suite.
   - Evaluation Run 4: **29/29** (§7).
 - **Step 22: Cleanup.** At the user's request, removed the stopped `case_study-ollama-1` container and the `case_study_ollama-data` volume (4.9 GB, `llama3.1`), then the `ollama/ollama` image (5.06 GB). The `ollama` compose service (profile `local-llm`) and its README section stay as an optional local setup; using it again re-pulls the image and the model.
 - **Step 23: Git.** `git init -b main`, first commit `ee347f2` (75 files). Before committing: `.env` is ignored; no `sk-` keys or private keys in tracked files; the only `.env` values found in tracked files are the `.env.example` defaults (`change-me-*`, demo DB name, OpenAI base URL). Remote `origin` = `git@github.com:kubrafelek/LLM-Based-Database-Data-D-scovery-System.git`. The push from this environment failed (`Permission denied (publickey)`), so the user pushes from their own terminal.
+- **Step 24: Pushed to GitHub.** The user set up `gh auth login` (HTTPS) and switched `origin` to `https://github.com/kubrafelek/LLM-Based-Database-Data-D-scovery-System.git`. The remote already had an `Initial commit` with only `LICENSE` (MIT), so it was merged with `--allow-unrelated-histories` (no conflicts) and pushed: `main` = `1d54a6e`, 77 files, `.env` not included.
 - **Note:** `docker compose --profile test down` also stopped the dev stack. It was restarted; volumes and data were unaffected. Use `docker compose rm -sf test-system-db test-target-db` to clean up only the test databases (now in the README).
 
 ---
