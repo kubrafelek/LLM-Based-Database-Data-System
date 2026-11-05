@@ -1,5 +1,5 @@
 ### Manual end-to-end walkthrough (VS Code REST Client / JetBrains HTTP Client).
-### Credentials must match AUTH_USERNAME / AUTH_PASSWORD and DEMO_DB_* in .env.
+### Credentials must match AUTH_USERNAME / AUTH_PASSWORD and DEMO_DB_READONLY_* in .env.
 
 @baseUrl = http://localhost:8000/api/v1
 
@@ -26,8 +26,8 @@ Content-Type: application/json
   "host": "demo-db",
   "port": 5432,
   "database": "llm_discovery_demo",
-  "username": "demo",
-  "password": "change-me-demo-db"
+  "username": "discovery_reader",
+  "password": "change-me-demo-reader"
 }
 
 ###

@@ -10,7 +10,7 @@ Environment (defaults come from the app's .env):
     API_URL        default http://localhost:8000/api/v1
     AUTH_USERNAME, AUTH_PASSWORD
     DEMO_DB_HOST   default demo-db
-    DEMO_DB_NAME, DEMO_DB_USER, DEMO_DB_PASSWORD
+    DEMO_DB_NAME; DEMO_DB_READONLY_USER / _PASSWORD (falls back to DEMO_DB_USER / _PASSWORD)
     SAMPLE_COUNT   default 10
     REQUEST_TIMEOUT seconds per classification, default 600
 """
@@ -98,8 +98,8 @@ def main() -> int:
             "host": os.environ.get("DEMO_DB_HOST", "demo-db"),
             "port": 5432,
             "database": os.environ["DEMO_DB_NAME"],
-            "username": os.environ["DEMO_DB_USER"],
-            "password": os.environ["DEMO_DB_PASSWORD"],
+            "username": os.environ.get("DEMO_DB_READONLY_USER") or os.environ["DEMO_DB_USER"],
+            "password": os.environ.get("DEMO_DB_READONLY_PASSWORD") or os.environ["DEMO_DB_PASSWORD"],
         },
     )
     if status != 201:

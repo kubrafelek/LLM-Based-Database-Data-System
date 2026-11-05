@@ -36,6 +36,9 @@ services:
       POSTGRES_DB: ${DEMO_DB_NAME}
       POSTGRES_USER: ${DEMO_DB_USER}
       POSTGRES_PASSWORD: ${DEMO_DB_PASSWORD}
+      # SELECT-only login the discovery service should use (db/demo/02_readonly_user.sh)
+      DEMO_DB_READONLY_USER: ${DEMO_DB_READONLY_USER:-}
+      DEMO_DB_READONLY_PASSWORD: ${DEMO_DB_READONLY_PASSWORD:-}
     ports:
       - "${DEMO_DB_EXPOSED_PORT:-5433}:5432"
     volumes:
@@ -83,6 +86,8 @@ services:
       POSTGRES_DB: test_target
       POSTGRES_USER: test
       POSTGRES_PASSWORD: test
+      DEMO_DB_READONLY_USER: reader
+      DEMO_DB_READONLY_PASSWORD: reader
     volumes:
       - ./db/demo:/docker-entrypoint-initdb.d:ro
     tmpfs:
@@ -108,6 +113,8 @@ services:
       TEST_TARGET_DB_NAME: test_target
       TEST_TARGET_DB_USER: test
       TEST_TARGET_DB_PASSWORD: test
+      TEST_TARGET_DB_READONLY_USER: reader
+      TEST_TARGET_DB_READONLY_PASSWORD: reader
     depends_on:
       test-system-db:
         condition: service_healthy

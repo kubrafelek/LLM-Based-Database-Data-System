@@ -52,3 +52,14 @@ def target_request() -> DbConnectionRequest:
         username=os.environ["TEST_TARGET_DB_USER"],
         password=SecretStr(os.environ["TEST_TARGET_DB_PASSWORD"]),
     )
+
+
+@pytest.fixture
+def readonly_target_request(target_request) -> DbConnectionRequest:
+    """The same target DB, via the SELECT-only role from db/demo/02_readonly_user.sh."""
+    return target_request.model_copy(
+        update={
+            "username": os.environ["TEST_TARGET_DB_READONLY_USER"],
+            "password": SecretStr(os.environ["TEST_TARGET_DB_READONLY_PASSWORD"]),
+        }
+    )

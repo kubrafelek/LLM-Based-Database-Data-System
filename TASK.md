@@ -21,8 +21,8 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | 5 | Metadata extraction | ✅ | `pg_catalog` inspection, optional `schema_name` filter, generic error messages |
 | 6 | Metadata CRUD | ✅ | Under `/api/v1` (plus PDF root-path aliases); delete keeps the connection; pagination |
 | 7 | LLM classification engine | ✅ | `httpx` `LLMClient`, masking, 12-key distribution + `pii_likelihood`, validation/normalization, retries, deterministic checks (TCKN, Luhn, email, IP) fused into the result, result cache |
-| 8 | Security & validation | ✅ | All spec §9 controls (see §3) |
-| 9 | Testing & QA | ✅ | 184 tests (155 unit, 24 integration, 5 e2e) + 37 black-box contract tests, see §6 |
+| 8 | Security & validation | ✅ | All spec §9 controls (see §3); SELECT-only target login (D16) |
+| 9 | Testing & QA | ✅ | 187 tests (155 unit, 27 integration, 5 e2e) + 37 black-box contract tests, see §6 |
 | 10 | Docker & documentation | ✅ | Compose (app, system-db, demo-db + test profile); README covers spec §13; web UI at `/ui/` |
 | 11 | Java migration (AI-assisted) | ⬜ | Not started |
 
@@ -43,7 +43,8 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 - [x] Sensitive samples are masked before they are sent to the LLM (`SAMPLE_MASKING_MODE`, default `partial`)
 - [x] Deterministic checks (TCKN, Luhn, email, IP) are combined with the LLM output; scores documented as not calibrated
 - [x] Classification results are cached while samples and settings are unchanged
-- [x] Unit, integration and e2e tests pass (184)
+- [x] Target DB scanned with a SELECT-only login; app sessions are read-only
+- [x] Unit, integration and e2e tests pass (187)
 - [x] Black-box contract suite passes against the Python service (37) and is ready for the Java port
 - [x] Web UI for all six services (`/ui/`)
 - [x] Docker Compose starts the application
@@ -117,15 +118,32 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | D13 | Classification cache | Results stored in `classification_results` (FK `db_columns`, `ON DELETE CASCADE`), keyed on column, `sample_count`, an HMAC-SHA256 fingerprint of the raw samples (key `ENCRYPTION_KEY`), LLM base URL + model, system-prompt hash, logic version, masking mode and checksum flag. Sampling changed from `ORDER BY random()` to `ORDER BY md5(value), value` so unchanged data gives the same samples. TTL `CLASSIFICATION_CACHE_TTL_SECONDS` (default 86400, `0` = off); `force_refresh` bypasses. Response gained `cached`, `classified_at` |
 | D14 | Python ↔ Java equivalence | `tests/contract`: HTTP-only pytest suite (no `app` imports), run via the compose `contract` profile against `CONTRACT_BASE_URL`. Asserts only LLM-independent rules (structure, status codes, checksum effects, cache, delete semantics) |
 | D15 | Open questions answered in README "Design Decisions & Assumptions" | New snapshot per extraction (connection reused); new column UUIDs per snapshot; non-PII via `pii_likelihood` + `predicted_category: null`; multiple categories expressed by the distribution, single `predicted_category`, checks need ≥ 80% of samples so mixed columns aren't forced; anonymization via `SAMPLE_MASKING_MODE` |
+| D16 | Target DB least privilege | `db/demo/02_readonly_user.sh` creates a SELECT-only login (`DEMO_DB_READONLY_USER`, default `discovery_reader`; idempotent, skips when unset), `default_transaction_read_only` on the role. The app's read-only session stays as the second layer. UI prefill, `requests.http`, README examples, the evaluation script and the contract suite default to it. README answers the remaining storage questions: connections are never deleted via the API (FK `RESTRICT`); deleting a snapshot cascades to tables, columns and cached results; results are stored as the cache, not a history |
 | D11 | Web UI | Static HTML/JS/CSS in `app/static`, served at `/ui/` (`/` redirects). No build step or CDN; same origin, so no CORS. Strict CSP response header; token in `sessionStorage` |
 
 ---
 
 ## 5. Next Steps
 
-1. Java migration (Task 2): Spring Boot port with the same endpoints, JSON contract, encryption, masking, checksum rules and cache; can share the system DB schema (migrations `0001`–`0003`).
+1. Java migration (Task 2): Spring Boot port with the same endpoints, JSON contract, encryption, masking, checksum rules and cache; can share the system DB schema (migrations `0001`–`0003`). Persistence choice to settle first: Spring Data JPA (checklist §7) vs. JDBC; the schema maps to JPA entities directly.
 2. `docs/MIGRATION_REPORT.md`: per step, the original code, Java equivalent, AI tool, exact prompt, manual corrections, tests and result.
 3. Verify the Java port with the same HTTP-only checks: `tests/contract` (`CONTRACT_BASE_URL=…`) and `scripts/evaluate_classification.py`.
+
+### 5a. Technical Analysis Checklist (external review)
+
+| Checklist area | Status | Where |
+|---|---|---|
+| 1. Scope (FastAPI, PostgreSQL, OpenAI-compatible LLM, Docker, auth, discovery, storage, 12 PII categories, docs) | ✅ | §1–§3a |
+| 1.11 Java migration | ⬜ | Task 2 |
+| 2. Architecture (target vs. system DB, connector, inspector, repositories, services, LLM client, classification engine) | ✅ | `infrastructure/database/{target,system}_database.py`, `repositories/`, `services/`, `infrastructure/llm/` |
+| 3. API: six endpoints, DTOs, status codes, validation, auth, central exception handling, OpenAPI | ✅ | `domain/schemas.py`, `core/exceptions.py` + `AppError` handler, `/docs` |
+| 4. Schema (users, connections, metadata, tables, columns) + open design questions | ✅ | §4 D5, D6, D13, D15, D16; README "Design Decisions & Assumptions" |
+| 5. Classification flow (column → metadata → connection → samples (default 10) → prompt → LLM → JSON parse → 12 keys → validation) | ✅ | `services/classification_service.py` |
+| 6.1–6.7, 6.9 Security (hashing, encryption at rest, SQL safety, auth, log hygiene, masking, output validation, timeouts and limits) | ✅ | README "Security Considerations" |
+| 6.8 Read-only DB user | ✅ (was 🟡) | D16 |
+| 7. Java mapping (Spring Boot, JPA/JDBC, Jakarta Validation, controllers, WebClient/RestClient, JUnit 5) | ⬜ | Task 2; the contract suite (D14) is the comparison step |
+| 8.1–8.9 Risks / decisions (two DBs, encryption, dynamic SQL, anonymization, probability validation, snapshots, column UUID lifecycle, timeout/retry, cache) | ✅ | D1–D16 |
+| 8.10 Pagination and performance | ✅ / known limits | `limit`/`offset` on the list; full-column sampling scan documented in README "Known Limitations" |
 
 ---
 
@@ -133,7 +151,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 
 Unit, integration and e2e: `docker compose --profile test run --rm tests`. Integration and e2e tests use dedicated tmpfs PostgreSQL databases seeded with the demo script; the LLM is mocked with `httpx.MockTransport` (`tests/fakes.py`).
 Contract: `docker compose --profile contract run --rm contract-tests` against a running deployment and the real LLM.
-**Total: 184 passed + 37 contract passed** (counts include parametrized cases).
+**Total: 187 passed + 37 contract passed** (counts include parametrized cases).
 
 ### Unit (155)
 
@@ -149,12 +167,13 @@ Contract: `docker compose --profile contract run --rm contract-tests` against a 
 | `test_security.py` | 10 | AES-GCM round trip with a random nonce; wrong key, tampered ciphertext and 2 invalid keys rejected; JWT round trip; expired and foreign-key tokens rejected; Argon2id hash verifies; malformed hash rejected |
 | `test_target_database.py` | 7 | Identifier quoting escapes `"`; 3 invalid identifiers rejected; sample query quotes identifiers, binds `LIMIT` and orders deterministically by `md5(value)` (no `random()`); `inet` sampled via `host()` (no netmask); `ConnectionInfo` repr hides the password |
 
-### Integration (24)
+### Integration (27)
 
 | File | # | Cases |
 |---|---|---|
 | `test_auth_service.py` | 4 | Authenticate valid/invalid users; admin seeding stores an Argon2 hash, is idempotent and applies a changed password |
 | `test_metadata_service.py` | 6 | Demo schema extracted and persisted (8 tables + 1 view, column UUIDs); password encrypted at rest; list / get / delete; schema filter; snapshots reuse one connection; bad credentials give a generic error and no secret in the logs |
+| `test_target_access.py` | 3 | App session rejects `INSERT` even with the owner login (`ReadOnlySQLTransactionError`); SELECT-only role extracts the 9 demo relations and classifies a column; SELECT-only role cannot `INSERT` or `CREATE TABLE` even after `SET default_transaction_read_only = off` (`InsufficientPrivilegeError`) |
 | `test_classification_flow.py` | 14 | Email column classified with masked samples (no raw email in the prompt or the logs; `email_format` evidence lifts `pii_likelihood` 0.97 → 0.988); "no category fits" accepted on the first reply; masking can be disabled; `sample_count` limits the samples; above `MAX_SAMPLE_COUNT` rejected; unknown column → 404; empty column classified from metadata only; demo `national_id` with a 0.5/0.5 LLM tie → `tckn` 1.0 via `tckn_format` 5/5 (raw values not sent to the LLM); checksum validation can be disabled; **cache:** repeated request served from cache (one LLM call, same result and `classified_at`, one stored row); `force_refresh`, another `sample_count` and another masking mode bypass it; inserting a row into the target table gives a miss (row removed afterwards); TTL `0` disables caching; deleting the snapshot deletes its cached results |
 
 ### End-to-end (5)
@@ -220,6 +239,12 @@ Contract: `docker compose --profile contract run --rm contract-tests` against a 
 - **Contract suite (D14):** `tests/contract` + compose service `contract-tests` (profile `contract`); skipped unless `CONTRACT_BASE_URL` is set. 37/37 against the Python service.
 - **README (D15):** "Design Decisions & Assumptions" table answering the open questions; sections for the cache, the new checks and contract tests.
 - Evaluation after these changes: still 29/29 (email and IP now also carry evidence: `pii_likelihood` 0.96).
+
+### Technical analysis checklist review (Step 26)
+- Checked the project against an external technical analysis checklist (§5a). Two gaps found and fixed:
+  - **Read-only DB user (D16):** `02_readonly_user.sh`, compose env for `demo-db` and `test-target-db`, `.env` vars; applied to the existing demo volume. Integration tests in `test_target_access.py`. Contract suite (37/37) and evaluation (29/29) re-run with the SELECT-only login.
+  - **Storage questions:** README "Design Decisions & Assumptions" gained rows for connection deletion, snapshot cascade, stored results and the scanning user.
+- Verified: LLM parse errors are logged without the reply content (messages only name the error and position), so no sample values reach the logs.
 
 ---
 

@@ -78,7 +78,7 @@ $EDITOR .env   # set LLM_API_KEY, and change every change-me-* value
 | Encryption | `ENCRYPTION_KEY` (base64, 32 bytes) |
 | LLM | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TIMEOUT`, `LLM_MAX_RETRIES`, `LLM_JSON_MODE` |
 | Target DB / sampling | `TARGET_DB_CONNECT_TIMEOUT_SECONDS`, `TARGET_DB_STATEMENT_TIMEOUT_MS`, `MAX_SAMPLE_COUNT`, `SAMPLE_MASKING_MODE`, `CHECKSUM_VALIDATION_ENABLED`, `CLASSIFICATION_CACHE_TTL_SECONDS` |
-| Demo DB | `DEMO_DB_NAME`, `DEMO_DB_USER`, `DEMO_DB_PASSWORD`, `DEMO_DB_EXPOSED_PORT` |
+| Demo DB | `DEMO_DB_NAME`, `DEMO_DB_USER`, `DEMO_DB_PASSWORD` (owner), `DEMO_DB_READONLY_USER`, `DEMO_DB_READONLY_PASSWORD` (SELECT-only login for scanning), `DEMO_DB_EXPOSED_PORT` |
 
 ## Docker Compose Startup
 
@@ -99,7 +99,7 @@ open http://localhost:8000/         # web UI
 
 - On every start, the `app` container runs `alembic upgrade head` and then launches uvicorn.
 - At startup the app creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`, stored as an Argon2 hash. If `AUTH_PASSWORD` changes, the hash is updated on the next start.
-- `demo-db` runs the demo script only when its volume is empty. To re-seed it, run `docker compose down -v`. This also wipes the system DB.
+- `demo-db` runs the init scripts in [db/demo/](db/demo/) only when its volume is empty: the case study demo script, then `02_readonly_user.sh` (the SELECT-only login). To re-seed, run `docker compose down -v`; this also wipes the system DB. To add only the read-only login to an existing volume: `docker compose exec demo-db sh /docker-entrypoint-initdb.d/02_readonly_user.sh`.
 
 | Migration | Content |
 |---|---|
@@ -158,7 +158,7 @@ AUTH="Authorization: Bearer $TOKEN"
 # Extract metadata. The app runs inside compose, so the host is "demo-db", not "localhost".
 # Optional: "schema_name": "public" to extract a single schema.
 METADATA_ID=$(curl -s -X POST $API/db/metadata -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"host":"demo-db","port":5432,"database":"llm_discovery_demo","username":"demo","password":"change-me-demo-db"}' \
+  -d '{"host":"demo-db","port":5432,"database":"llm_discovery_demo","username":"discovery_reader","password":"change-me-demo-reader"}' \
   | jq -r .metadata_id)
 
 curl -s $API/metadata -H "$AUTH" | jq
@@ -369,7 +369,7 @@ If the server rejects `response_format`, set `LLM_JSON_MODE=false`. The parser t
 | Password hashing | Argon2id. Unknown usernames are checked against a dummy hash, so timing doesn't reveal which accounts exist |
 | Credentials at rest | Target DB passwords are encrypted with AES-256-GCM (random nonce). The key comes only from `ENCRYPTION_KEY` and is never stored in the DB. Passwords are never returned |
 | Secrets | Only via environment / `.env` (git-ignored) |
-| Read-only target access | `default_transaction_read_only=on` plus a `statement_timeout`. A dedicated read-only DB user is still recommended |
+| Read-only target access | Two layers. (1) Every target session uses `default_transaction_read_only=on` and a `statement_timeout`, even with an owner login. (2) `demo-db` has a SELECT-only login (`DEMO_DB_READONLY_USER`, created by [db/demo/02_readonly_user.sh](db/demo/02_readonly_user.sh)): no INSERT/UPDATE/DELETE/CREATE privileges even if the session setting is turned off. Integration tests check both. For real databases, create an equivalent role and scan with it |
 | SQL injection | Only the sample limit is a value, and it is bound. Identifiers come from the stored catalog and are validated (non-empty, no NUL, ≤ 63 bytes) and quoted. LLM output is never executed |
 | LLM input | Samples are masked, truncated, JSON-encoded and delimited. The prompt marks them as untrusted data |
 | LLM output | Strictly validated, so a manipulated reply can at most skew a distribution |
@@ -396,6 +396,10 @@ The case study leaves several choices to the developer. They are answered here.
 | How are samples anonymized before they reach the LLM provider? | `SAMPLE_MASKING_MODE`: `partial` (default) masks email local parts and middle digits of numbers with ≥ 6 digits, keeping the format; `strict` keeps only the shape; `none` sends values as is. Deterministic checks run on the raw values inside the app; only counts leave it | Classification needs the format, not the identity. For real personal data a self-hosted model (Ollama profile) avoids sending anything out |
 | Are the scores probabilities? | They are **model confidence scores, not calibrated probabilities**, stabilized by deterministic checks and the cache | No labeled data to calibrate against; the API docs and UI say so |
 | How is repeated classification of the same column handled? | Cached on column, samples, model, prompt and settings; reused for `CLASSIFICATION_CACHE_TTL_SECONDS` (see [Classification cache](#classification-cache)) | Cost, latency, and a stable answer for unchanged data |
+| What happens to snapshots when a connection is deleted? | Connections are never deleted through the API; there is no endpoint for it. The FK `db_metadata.connection_id` is `ON DELETE RESTRICT`, so a connection can only be removed (manually) once no snapshot references it | A connection is shared by all snapshots of the same target; silently cascading would delete history |
+| Does deleting a snapshot delete its tables and columns? | **Yes**: `db_tables`, `db_columns` and the cached `classification_results` go with it (`ON DELETE CASCADE`); the connection stays | Nothing else refers to them, so orphans would only waste space |
+| Are classification results stored? | **Yes**, in `classification_results`, as the cache (TTL `CLASSIFICATION_CACHE_TTL_SECONDS`); the latest result per key is kept, not a history | Avoids repeated LLM calls; a history table can be added if auditing needs it |
+| Which DB user scans the target? | A SELECT-only login; the demo ships `discovery_reader` | Least privilege; the app's read-only session is the second layer |
 | How are the Python and Java implementations kept equivalent? | One black-box contract suite (`tests/contract`) and the evaluation script, both HTTP only, run against both | Same request → same contract and business rules |
 
 Other decisions:

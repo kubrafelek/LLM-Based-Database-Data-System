@@ -5,7 +5,8 @@ so both implementations are held to the same contract and business rules:
 
     CONTRACT_BASE_URL=http://app:8000 pytest tests/contract
 
-Credentials and the target database default to the values in .env (AUTH_*, DEMO_DB_*).
+Credentials and the target database default to the values in .env (AUTH_*, DEMO_DB_*; the
+SELECT-only DEMO_DB_READONLY_* login when it is set).
 The target must be the case study demo database. Classification calls a real LLM, so the
 tests only assert rules that hold for any LLM answer.
 """
@@ -37,8 +38,13 @@ def target() -> dict:
         "host": env("CONTRACT_TARGET_HOST", "demo-db"),
         "port": int(env("CONTRACT_TARGET_PORT", "5432")),
         "database": env("CONTRACT_TARGET_DATABASE", os.environ.get("DEMO_DB_NAME")),
-        "username": env("CONTRACT_TARGET_USERNAME", os.environ.get("DEMO_DB_USER")),
-        "password": env("CONTRACT_TARGET_PASSWORD", os.environ.get("DEMO_DB_PASSWORD")),
+        "username": env(
+            "CONTRACT_TARGET_USERNAME", os.environ.get("DEMO_DB_READONLY_USER") or os.environ.get("DEMO_DB_USER")
+        ),
+        "password": env(
+            "CONTRACT_TARGET_PASSWORD",
+            os.environ.get("DEMO_DB_READONLY_PASSWORD") or os.environ.get("DEMO_DB_PASSWORD"),
+        ),
     }
 
 
