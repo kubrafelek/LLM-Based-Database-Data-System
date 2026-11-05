@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Data Discovery</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>LLM Data Discovery</span>
+    </div>
+    <div class="session" id="session" hidden>
+      <span id="session-user"></span>
+      <button type="button" class="btn btn-ghost" id="logout">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Sign in -->
+    <section class="card login" id="login-view">
+      <h1>Sign in</h1>
+      <p class="muted">Use the credentials from <code>AUTH_USERNAME</code> / <code>AUTH_PASSWORD</code> in <code>.env</code>.</p>
+      <form id="login-form" autocomplete="on">
+        <label>Username <input name="username" required autocomplete="username"></label>
+        <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+        <button class="btn btn-primary" type="submit">Sign in</button>
+      </form>
+    </section>
+
+    <!-- Workspace -->
+    <div class="workspace" id="app-view" hidden>
+      <aside class="sidebar">
+        <section class="card">
+          <h2>Scan a database</h2>
+          <form id="connect-form" class="grid-form">
+            <label class="span-2">Host <input name="host" required value="demo-db"></label>
+            <label>Port <input name="port" type="number" min="1" max="65535" required value="5432"></label>
+            <label>Schema <input name="schema_name" placeholder="all"></label>
+            <label class="span-2">Database <input name="database" required value="llm_discovery_demo"></label>
+            <label>Username <input name="username" required value="demo" autocomplete="off"></label>
+            <label>Password <input name="password" type="password" autocomplete="off"></label>
+            <button class="btn btn-primary span-2" type="submit">Extract metadata</button>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Snapshots</h2>
+            <button type="button" class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
+          </div>
+          <ul class="snapshot-list" id="snapshot-list"></ul>
+        </section>
+      </aside>
+
+      <section class="detail" id="detail">
+        <div class="empty card">
+          <h2>No snapshot selected</h2>
+          <p class="muted">Extract metadata from a database, or pick a snapshot on the left.</p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

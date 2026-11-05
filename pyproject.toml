@@ -1,0 +1,11 @@
+[project]
+name = "llm-data-discovery"
+version = "1.0.0"
+description = "LLM-based PII discovery and classification for PostgreSQL databases"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]

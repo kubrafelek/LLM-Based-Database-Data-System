@@ -1,0 +1,56 @@
+### Manual end-to-end walkthrough (VS Code REST Client / JetBrains HTTP Client).
+### Credentials must match AUTH_USERNAME / AUTH_PASSWORD and DEMO_DB_* in .env.
+
+@baseUrl = http://localhost:8000/api/v1
+
+### 1. Get a token (JSON body; HTTP Basic also works)
+# @name auth
+POST {{baseUrl}}/auth
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "change-me-admin"
+}
+
+###
+@token = {{auth.response.body.access_token}}
+
+### 2. Extract metadata from the demo database (host = compose service name)
+# @name metadata
+POST {{baseUrl}}/db/metadata
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "host": "demo-db",
+  "port": 5432,
+  "database": "llm_discovery_demo",
+  "username": "demo",
+  "password": "change-me-demo-db"
+}
+
+###
+@metadataId = {{metadata.response.body.metadata_id}}
+
+### 3. List metadata snapshots
+GET {{baseUrl}}/metadata?limit=20&offset=0
+Authorization: Bearer {{token}}
+
+### 4. Metadata detail (copy a column_id from here)
+GET {{baseUrl}}/metadata/{{metadataId}}
+Authorization: Bearer {{token}}
+
+### 5. Classify a column
+POST {{baseUrl}}/classify
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "column_id": "<column_id from step 4>",
+  "sample_count": 10
+}
+
+### 6. Delete the snapshot (the stored connection is kept)
+DELETE {{baseUrl}}/metadata/{{metadataId}}
+Authorization: Bearer {{token}}

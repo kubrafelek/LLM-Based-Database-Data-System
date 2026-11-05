@@ -1,0 +1,120 @@
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    env_file: .env
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on:
+      system-db:
+        condition: service_healthy
+      demo-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Internal database: users, extracted metadata and encrypted connection info.
+  system-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${SYSTEM_DB_NAME}
+      POSTGRES_USER: ${SYSTEM_DB_USER}
+      POSTGRES_PASSWORD: ${SYSTEM_DB_PASSWORD}
+    volumes:
+      - system-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # TCP check: during first-start initialisation postgres only listens on the unix socket.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${SYSTEM_DB_USER} -d ${SYSTEM_DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Target database to scan, seeded with the case study demo script on first start.
+  demo-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DEMO_DB_NAME}
+      POSTGRES_USER: ${DEMO_DB_USER}
+      POSTGRES_PASSWORD: ${DEMO_DB_PASSWORD}
+    ports:
+      - "${DEMO_DB_EXPOSED_PORT:-5433}:5432"
+    volumes:
+      - ./db/demo:/docker-entrypoint-initdb.d:ro
+      - demo-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${DEMO_DB_USER} -d ${DEMO_DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # --- Local LLM profile: `docker compose --profile local-llm up -d` -------------
+  # Ollama serves an OpenAI-compatible API at http://ollama:11434/v1, so sample
+  # values never leave the machine. Pull a model once:
+  #   docker compose exec ollama ollama pull llama3.1
+  ollama:
+    profiles: [local-llm]
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+  # --- Test profile: `docker compose --profile test run --rm tests` -------------
+  # Throwaway databases (tmpfs) so tests never touch the development data above.
+
+  test-system-db:
+    profiles: [test]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: test_system
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U test -d test_system"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  test-target-db:
+    profiles: [test]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: test_target
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    volumes:
+      - ./db/demo:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U test -d test_target"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    environment:
+      RUN_INTEGRATION: "1"
+      SYSTEM_DB_HOST: test-system-db
+      SYSTEM_DB_NAME: test_system
+      SYSTEM_DB_USER: test
+      SYSTEM_DB_PASSWORD: test
+      TEST_TARGET_DB_HOST: test-target-db
+      TEST_TARGET_DB_NAME: test_target
+      TEST_TARGET_DB_USER: test
+      TEST_TARGET_DB_PASSWORD: test
+    depends_on:
+      test-system-db:
+        condition: service_healthy
+      test-target-db:
+        condition: service_healthy
+
+volumes:
+  system-db-data:
+  demo-db-data:
+  ollama-data:
