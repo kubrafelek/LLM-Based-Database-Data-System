@@ -1,6 +1,7 @@
 # TASK.md: Progress Tracker
 
 Technical progress of the case study: implementation status, decisions, technical changes and test cases.
+Code paths in this file are relative to the implementation folder: [LLM_based_python/](LLM_based_python/) (Task 1) and [LLM_based_java/](LLM_based_java/) (Task 2).
 Requirements come from the Technical Specification in [Appendix A](#appendix-a-technical-specification) and the original `case_study.pdf`.
 
 Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not started
@@ -119,13 +120,14 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | D14 | Python ↔ Java equivalence | `tests/contract`: HTTP-only pytest suite (no `app` imports), run via the compose `contract` profile against `CONTRACT_BASE_URL`. Asserts only LLM-independent rules (structure, status codes, checksum effects, cache, delete semantics) |
 | D15 | Open questions answered in README "Design Decisions & Assumptions" | New snapshot per extraction (connection reused); new column UUIDs per snapshot; non-PII via `pii_likelihood` + `predicted_category: null`; multiple categories expressed by the distribution, single `predicted_category`, checks need ≥ 80% of samples so mixed columns aren't forced; anonymization via `SAMPLE_MASKING_MODE` |
 | D16 | Target DB least privilege | `db/demo/02_readonly_user.sh` creates a SELECT-only login (`DEMO_DB_READONLY_USER`, default `discovery_reader`; idempotent, skips when unset), `default_transaction_read_only` on the role. The app's read-only session stays as the second layer. UI prefill, `requests.http`, README examples, the evaluation script and the contract suite default to it. README answers the remaining storage questions: connections are never deleted via the API (FK `RESTRICT`); deleting a snapshot cascades to tables, columns and cached results; results are stored as the cache, not a history |
+| D17 | Repository layout | Two self-contained implementation folders, `LLM_based_python/` and `LLM_based_java/`, each with its own compose file, `.env.example`, README and demo DB scripts; root keeps an overview README, `TASK.md`, `LICENSE`. Compose project names are fixed (`name: llm-python`, later `llm-java`) so container/volume names don't depend on the folder. The Java port is organized by feature module (`auth`, `discovery`, `classification`, `common`) so each can be ported and compared with its Python counterpart independently |
 | D11 | Web UI | Static HTML/JS/CSS in `app/static`, served at `/ui/` (`/` redirects). No build step or CDN; same origin, so no CORS. Strict CSP response header; token in `sessionStorage` |
 
 ---
 
 ## 5. Next Steps
 
-1. Java migration (Task 2): Spring Boot port with the same endpoints, JSON contract, encryption, masking, checksum rules and cache; can share the system DB schema (migrations `0001`–`0003`). Persistence choice to settle first: Spring Data JPA (checklist §7) vs. JDBC; the schema maps to JPA entities directly.
+1. Java migration (Task 2) in `LLM_based_java/`, module by module (`common` → `auth` → `discovery` → `classification`): Spring Boot port with the same endpoints, JSON contract, encryption, masking, checksum rules and cache; can share the system DB schema (migrations `0001`–`0003`). Persistence choice to settle first: Spring Data JPA (checklist §7) vs. JDBC; the schema maps to JPA entities directly.
 2. `docs/MIGRATION_REPORT.md`: per step, the original code, Java equivalent, AI tool, exact prompt, manual corrections, tests and result.
 3. Verify the Java port with the same HTTP-only checks: `tests/contract` (`CONTRACT_BASE_URL=…`) and `scripts/evaluate_classification.py`.
 
@@ -239,6 +241,10 @@ Contract: `docker compose --profile contract run --rm contract-tests` against a 
 - **Contract suite (D14):** `tests/contract` + compose service `contract-tests` (profile `contract`); skipped unless `CONTRACT_BASE_URL` is set. 37/37 against the Python service.
 - **README (D15):** "Design Decisions & Assumptions" table answering the open questions; sections for the cache, the new checks and contract tests.
 - Evaluation after these changes: still 29/29 (email and IP now also carry evidence: `pii_likelihood` 0.96).
+
+### Repository split (Step 27, D17)
+- Python project moved to `LLM_based_python/` (history kept via `git mv`); root README rewritten as an overview; `LLM_based_java/` created with the planned module structure.
+- `docker-compose.yml` gained `name: llm-python`. System and demo DB data carried over to the renamed volumes. Re-verified from the new folder: 187 passed, contract 37/37.
 
 ### Technical analysis checklist review (Step 26)
 - Checked the project against an external technical analysis checklist (§5a). Two gaps found and fixed:

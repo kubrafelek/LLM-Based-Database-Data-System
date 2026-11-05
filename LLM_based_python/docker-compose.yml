@@ -1,3 +1,6 @@
+# Compose project name: fixes container/volume names (llm-python-*) independent of the folder name.
+name: llm-python
+
 services:
   app:
     build:
