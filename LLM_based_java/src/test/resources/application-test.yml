@@ -1,0 +1,9 @@
+# Integration tests: the system DB comes from SYSTEM_DB_* (compose "tests" service); the rest is fixed here.
+app:
+  env: test
+  auth-username: admin
+  auth-password: secret
+  jwt-secret-key: test-jwt-secret-with-enough-length-1234
+  encryption-key: a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=
+  llm-api-key: test
+  llm-model: fake-model

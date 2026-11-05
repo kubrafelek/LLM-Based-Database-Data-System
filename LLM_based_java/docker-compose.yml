@@ -1,0 +1,132 @@
+# Compose project name: fixes container/volume names (llm-java-*) independent of the folder name.
+name: llm-java
+
+services:
+  app:
+    build:
+      context: .
+      target: runtime
+    env_file: .env
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      system-db:
+        condition: service_healthy
+      demo-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Internal database: users, extracted metadata, encrypted connection info, cached results.
+  system-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${SYSTEM_DB_NAME}
+      POSTGRES_USER: ${SYSTEM_DB_USER}
+      POSTGRES_PASSWORD: ${SYSTEM_DB_PASSWORD}
+    volumes:
+      - system-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # TCP check: during first-start initialisation postgres only listens on the unix socket.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${SYSTEM_DB_USER} -d ${SYSTEM_DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Target database to scan, seeded with the case study demo script on first start.
+  demo-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DEMO_DB_NAME}
+      POSTGRES_USER: ${DEMO_DB_USER}
+      POSTGRES_PASSWORD: ${DEMO_DB_PASSWORD}
+      # SELECT-only login the discovery service should use (db/demo/02_readonly_user.sh)
+      DEMO_DB_READONLY_USER: ${DEMO_DB_READONLY_USER:-}
+      DEMO_DB_READONLY_PASSWORD: ${DEMO_DB_READONLY_PASSWORD:-}
+    ports:
+      - "${DEMO_DB_EXPOSED_PORT:-5434}:5432"
+    volumes:
+      - ./db/demo:/docker-entrypoint-initdb.d:ro
+      - demo-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${DEMO_DB_USER} -d ${DEMO_DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # --- Test profile: `docker compose --profile test run --rm tests` ------------
+  # Throwaway databases (tmpfs) for the JUnit integration tests.
+  test-system-db:
+    profiles: [test]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: test_system
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U test -d test_system"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  test-target-db:
+    profiles: [test]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: test_target
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      DEMO_DB_READONLY_USER: reader
+      DEMO_DB_READONLY_PASSWORD: reader
+    volumes:
+      - ./db/demo:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U test -d test_target"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    environment:
+      RUN_INTEGRATION: "1"
+      SYSTEM_DB_HOST: test-system-db
+      SYSTEM_DB_NAME: test_system
+      SYSTEM_DB_USER: test
+      SYSTEM_DB_PASSWORD: test
+      TEST_TARGET_DB_HOST: test-target-db
+      TEST_TARGET_DB_NAME: test_target
+      TEST_TARGET_DB_USER: test
+      TEST_TARGET_DB_PASSWORD: test
+      TEST_TARGET_DB_READONLY_USER: reader
+      TEST_TARGET_DB_READONLY_PASSWORD: reader
+    depends_on:
+      test-system-db:
+        condition: service_healthy
+      test-target-db:
+        condition: service_healthy
+
+  # --- Contract profile: the Python project's black-box API suite, run against this service.
+  # docker compose --profile contract run --rm contract-tests
+  contract-tests:
+    profiles: [contract]
+    build:
+      context: ../LLM_based_python
+      target: test
+    env_file: .env
+    environment:
+      CONTRACT_BASE_URL: ${CONTRACT_BASE_URL:-http://app:8080}
+    command: ["pytest", "-p", "no:cacheprovider", "tests/contract", "-v"]
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  system-db-data:
+  demo-db-data:

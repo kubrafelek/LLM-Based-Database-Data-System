@@ -11,7 +11,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 ## 1. Current Status
 
 **Last updated:** 2026-11-05
-**Current phase:** Python implementation (Task 1) complete: deterministic checks, classification cache, black-box contract suite and web UI; verified with a real LLM (29/29). Next: Java migration (Task 2).
+**Current phase:** Both tasks complete. Task 1 (Python): deterministic checks, classification cache, contract suite, web UI; 29/29 with a real LLM. Task 2 (Java): Spring Boot port passing the unchanged Python contract suite (37/37) and the same evaluation (29/29); migration documented in `LLM_based_java/docs/MIGRATION_REPORT.md`.
 
 | # | Phase | Status | Notes |
 |---|---|---|---|
@@ -25,7 +25,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | 8 | Security & validation | ✅ | All spec §9 controls (see §3); SELECT-only target login (D16) |
 | 9 | Testing & QA | ✅ | 187 tests (155 unit, 27 integration, 5 e2e) + 37 black-box contract tests, see §6 |
 | 10 | Docker & documentation | ✅ | Compose (app, system-db, demo-db + test profile); README covers spec §13; web UI at `/ui/` |
-| 11 | Java migration (AI-assisted) | ⬜ | Not started |
+| 11 | Java migration (AI-assisted) | ✅ | Spring Boot 3.3 / Java 21 in `LLM_based_java/`; 161 JUnit tests (102 golden); Python contract suite 37/37; evaluation 29/29 (D18, D19) |
 
 ---
 
@@ -50,8 +50,8 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 - [x] Web UI for all six services (`/ui/`)
 - [x] Docker Compose starts the application
 - [x] `.env.example` and README are complete
-- [ ] Java implementation reproduces the Python system
-- [ ] AI migration prompts and methods are documented
+- [x] Java implementation reproduces the Python system (contract 37/37, evaluation 29/29 with the same scores, golden 102/102)
+- [x] AI migration prompts and methods are documented (`LLM_based_java/docs/MIGRATION_REPORT.md`)
 
 ---
 
@@ -97,7 +97,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | 12 PII categories | ✅ | All 12 always returned |
 | All config in `.env` | ✅ | `app/core/config.py` reads only env (test-profile throwaway DB credentials are fixed in compose) |
 | Working Docker setup, README, `.env.example` | ✅ | |
-| Task 2: Java conversion with AI, documenting steps/methods/prompts | ⬜ | Next phase |
+| Task 2: Java conversion with AI, documenting steps/methods/prompts | ✅ | `LLM_based_java/`, `docs/MIGRATION_REPORT.md` |
 
 ---
 
@@ -121,29 +121,30 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | D15 | Open questions answered in README "Design Decisions & Assumptions" | New snapshot per extraction (connection reused); new column UUIDs per snapshot; non-PII via `pii_likelihood` + `predicted_category: null`; multiple categories expressed by the distribution, single `predicted_category`, checks need ≥ 80% of samples so mixed columns aren't forced; anonymization via `SAMPLE_MASKING_MODE` |
 | D16 | Target DB least privilege | `db/demo/02_readonly_user.sh` creates a SELECT-only login (`DEMO_DB_READONLY_USER`, default `discovery_reader`; idempotent, skips when unset), `default_transaction_read_only` on the role. The app's read-only session stays as the second layer. UI prefill, `requests.http`, README examples, the evaluation script and the contract suite default to it. README answers the remaining storage questions: connections are never deleted via the API (FK `RESTRICT`); deleting a snapshot cascades to tables, columns and cached results; results are stored as the cache, not a history |
 | D17 | Repository layout | Two self-contained implementation folders, `LLM_based_python/` and `LLM_based_java/`, each with its own compose file, `.env.example`, README and demo DB scripts; root keeps an overview README, `TASK.md`, `LICENSE`. Compose project names are fixed (`name: llm-python`, later `llm-java`) so container/volume names don't depend on the folder. The Java port is organized by feature module (`auth`, `discovery`, `classification`, `common`) so each can be ported and compared with its Python counterpart independently |
+| D18 | Java stack | Java 21, Spring Boot 3.3, Maven. System DB: Spring Data JPA + Flyway `V1` (same schema as Alembic 0001–0003, `baseline-on-migrate` so a Python-created DB can be shared), `JdbcTemplate` for the connection upsert and the JSONB cache. Target DBs: JDBC via `PGSimpleDataSource` set field by field. LLM: `RestClient` on JDK `HttpClient`. Auth: servlet filter (Bearer or Basic) + `spring-security-crypto` Argon2id with argon2-cffi's parameters + jjwt HS256, so hashes and tokens are interchangeable with Python. Errors: `{"detail"}`, validation 422. Same env var names; host ports 8080 / 5434 |
+| D19 | Migration verification | The Python contract suite runs unchanged against Java (compose `contract` profile builds the Python test image). Golden data generated from the Python reference (`LLM_based_java/scripts/generate_golden.py` → `golden.json`) is asserted by `GoldenTest`. JUnit integration tests use compose tmpfs DBs (like the Python suite) instead of Testcontainers. Rule: fix the port, never the specification |
 | D11 | Web UI | Static HTML/JS/CSS in `app/static`, served at `/ui/` (`/` redirects). No build step or CDN; same origin, so no CORS. Strict CSP response header; token in `sessionStorage` |
 
 ---
 
 ## 5. Next Steps
 
-1. Java migration (Task 2) in `LLM_based_java/`, module by module (`common` → `auth` → `discovery` → `classification`): Spring Boot port with the same endpoints, JSON contract, encryption, masking, checksum rules and cache; can share the system DB schema (migrations `0001`–`0003`). Persistence choice to settle first: Spring Data JPA (checklist §7) vs. JDBC; the schema maps to JPA entities directly.
-2. `docs/MIGRATION_REPORT.md`: per step, the original code, Java equivalent, AI tool, exact prompt, manual corrections, tests and result.
-3. Verify the Java port with the same HTTP-only checks: `tests/contract` (`CONTRACT_BASE_URL=…`) and `scripts/evaluate_classification.py`.
+1. ~~Java migration (Task 2)~~ ✅ (D18, D19).
+2. Optional: a CI workflow running both test suites and the contract suite against both services; a batch / whole-table classification endpoint (fewer LLM calls, columns give each other context).
 
 ### 5a. Technical Analysis Checklist (external review)
 
 | Checklist area | Status | Where |
 |---|---|---|
 | 1. Scope (FastAPI, PostgreSQL, OpenAI-compatible LLM, Docker, auth, discovery, storage, 12 PII categories, docs) | ✅ | §1–§3a |
-| 1.11 Java migration | ⬜ | Task 2 |
+| 1.11 Java migration | ✅ | D18, D19 |
 | 2. Architecture (target vs. system DB, connector, inspector, repositories, services, LLM client, classification engine) | ✅ | `infrastructure/database/{target,system}_database.py`, `repositories/`, `services/`, `infrastructure/llm/` |
 | 3. API: six endpoints, DTOs, status codes, validation, auth, central exception handling, OpenAPI | ✅ | `domain/schemas.py`, `core/exceptions.py` + `AppError` handler, `/docs` |
 | 4. Schema (users, connections, metadata, tables, columns) + open design questions | ✅ | §4 D5, D6, D13, D15, D16; README "Design Decisions & Assumptions" |
 | 5. Classification flow (column → metadata → connection → samples (default 10) → prompt → LLM → JSON parse → 12 keys → validation) | ✅ | `services/classification_service.py` |
 | 6.1–6.7, 6.9 Security (hashing, encryption at rest, SQL safety, auth, log hygiene, masking, output validation, timeouts and limits) | ✅ | README "Security Considerations" |
 | 6.8 Read-only DB user | ✅ (was 🟡) | D16 |
-| 7. Java mapping (Spring Boot, JPA/JDBC, Jakarta Validation, controllers, WebClient/RestClient, JUnit 5) | ⬜ | Task 2; the contract suite (D14) is the comparison step |
+| 7. Java mapping (Spring Boot, JPA/JDBC, Jakarta Validation, controllers, WebClient/RestClient, JUnit 5) | ✅ | D18; MIGRATION_REPORT §5 module mapping; contract suite (D14) + golden tests compare the results |
 | 8.1–8.9 Risks / decisions (two DBs, encryption, dynamic SQL, anonymization, probability validation, snapshots, column UUID lifecycle, timeout/retry, cache) | ✅ | D1–D16 |
 | 8.10 Pagination and performance | ✅ / known limits | `limit`/`offset` on the list; full-column sampling scan documented in README "Known Limitations" |
 
@@ -189,6 +190,22 @@ Contract: `docker compose --profile contract run --rm contract-tests` against a 
 | File | # | Cases |
 |---|---|---|
 | `tests/contract/test_api_contract.py` | 37 | **Auth:** JSON and Basic login return a bearer token; wrong password 401; 5 protected endpoints reject missing and invalid tokens; PDF root-path aliases; 1 MB body → 413. **Extraction:** 9 demo relations, unique UUID column IDs, `table_count`; 4 PostgreSQL types (`character varying(100)`, `date`, `numeric(10,2)`, `inet`); password never returned; wrong credentials → generic 400; invalid input → 422. **List / detail:** snapshot listed with name, count, date; detail column IDs equal the extraction; unknown 404, malformed 422. **Classify:** response shape (12 keys, sum 1, default `sample_count` 10, `cached`, `classified_at`); sample values never returned; column ID validation (404 / 422 / 422); `sample_count` 0, −1, 101 → 422; TCKN rule (`tckn_format` 5/5, `national_id_number` 0, `tckn` ≥ 0.3); email and IP evidence give ≥ 0.6 and the prediction; no evidence (distribution = LLM) for prices, masked cards, names; cache hit then `force_refresh` miss. **Delete:** re-extraction reuses the connection with a new snapshot; delete status; then 404 on get, delete and classify; other snapshot untouched |
+
+### Java (161 JUnit tests: `LLM_based_java/src/test`)
+
+Run with `docker compose --profile test run --build --rm tests mvn -B test` in `LLM_based_java/` (plain `mvn test` runs golden + unit only). The Python contract suite also runs against the Java service: `docker compose --profile contract run --rm contract-tests` → **37/37**.
+
+| File | # | Cases |
+|---|---|---|
+| `GoldenTest` | 102 | Outputs generated by the Python reference must match: masking of 30 values × 3 modes; TCKN format/checksum, Luhn, email and IP checks on 30 values; evidence for 10 sample sets; fusion for 7 cases (incl. the observed `national_id` replies); parsing of 12 LLM payloads incl. exact error messages; byte-identical system prompt and 9 user prompts (quotes, newlines, Unicode, control chars, empty samples); decrypts a Python-encrypted password, verifies a Python Argon2 hash, accepts a Python JWT |
+| `LlmClientTest` | 15 | OpenAI-compatible request (`temperature 0`, JSON mode, Bearer key); JSON mode off; empty key sends no header; retries 503/429; gives up after max retries; no retry on 400; `insufficient_quota` / `credit_balance_exhausted` fail fast (2); parse re-request; parse retries exhausted; unexpected shape; code fences; 3 invalid contents |
+| `SecurityTest` | 7 | AES-GCM round trip with random nonce; wrong key and tampered ciphertext rejected; 2 invalid keys; JWT round trip; expired and foreign tokens rejected; Argon2id format and verification, malformed hash |
+| `TargetDatabaseTest` | 7 | Identifier quoting; 3 invalid identifiers (empty, NUL, > 63 bytes); sample query quoted, bound, `md5` order; `inet` via `host()`; `ConnectionInfo` hides the password |
+| `ClassificationCacheTest` | 3 | Stable, order-independent key; 8 input changes give 8 distinct new keys; keyed fingerprint |
+| `MetadataIntegrationTest` | 7 | Demo schema extracted (9 relations, VIEW type, unique column IDs, stored column count, types); password encrypted at rest; list/get/delete keep the connection; pagination newest first; schema filter incl. unknown schema → 422; connection reuse; bad credentials → generic 400 |
+| `ClassificationIntegrationTest` | 13 | Email column with masked samples and `email_format` evidence (0.97 → 0.988); "no category fits"; TCKN tie → `tckn` 1.0, raw values not sent; checksum off; masking off; `sample_count` limit / > max / unknown column; empty column; cache hit, bypass (force, count, masking), changed data, TTL 0, cascade delete; SELECT-only role classifies |
+| `TargetAccessIntegrationTest` | 2 | App session rejects writes for the owner (SQLSTATE 25006); SELECT-only role cannot INSERT/CREATE even with read-only off (42501) |
+| `ApiFlowIntegrationTest` | 5 | Full HTTP flow; Basic auth on `/auth` and protected endpoints, wrong/missing credentials 401; PDF alias paths; unreachable target → 400; validation 422 (body UUID, `limit=0`, path UUID), `/health`, UI CSP header |
 
 ### Classification evaluation (real LLM)
 
@@ -242,6 +259,13 @@ Contract: `docker compose --profile contract run --rm contract-tests` against a 
 - **README (D15):** "Design Decisions & Assumptions" table answering the open questions; sections for the cache, the new checks and contract tests.
 - Evaluation after these changes: still 29/29 (email and IP now also carry evidence: `pii_likelihood` 0.96).
 
+### Java migration (Step 28, D18, D19)
+Full record: `LLM_based_java/docs/MIGRATION_REPORT.md` (tool, prompts, steps, corrections, verification).
+- Modules ported in order `common` → `auth` → `discovery` → `classification`; Dockerfile (build / test / runtime) and compose (`llm-java`: app 8080, system-db, demo-db 5434, `test` and `contract` profiles); UI assets copied to `static/ui`.
+- Hazards handled from the analysis: Python `round()` → `BigDecimal` HALF_EVEN; `%` → `Math.floorMod` (TCKN check digit); `json.dumps` formatting for byte-identical prompts; IP parsing without DNS (Guava); FastAPI 422 for validation errors.
+- Defects found by the tests and fixed in the port: JWT key needs the JCA name `HmacSHA256`; Spring's default error body replaced by `{"detail"}`; `save()` → `merge()` with app-assigned IDs replaced by `persist()`; `Set.of(…).contains(null)` NPE on a 429 without `error.code`.
+- Results: contract 37/37 (suite unchanged), evaluation 29/29 with the same scores as Python, 161 JUnit tests (102 golden, 32 unit, 27 integration), UI without console errors.
+
 ### Repository split (Step 27, D17)
 - Python project moved to `LLM_based_python/` (history kept via `git mv`); root README rewritten as an overview; `LLM_based_java/` created with the planned module structure.
 - `docker-compose.yml` gained `name: llm-python`. System and demo DB data carried over to the renamed volumes. Re-verified from the new folder: 187 passed, contract 37/37.
@@ -265,6 +289,7 @@ Contract: `docker compose --profile contract run --rm contract-tests` against a 
 | 3 | `gpt-4o-mini` | Robustness fixes | 28/29 | Non-PII 14/14; only miss `national_id` → `national_id_number` |
 | 4 | `gpt-4o-mini` | + checksum fusion (D10) | **29/29** | `national_id` → `tckn` 1.00; `social_security_number` stays `ssn` 0.70 |
 | 5 | `gpt-4o-mini` | + email / IP checks, deterministic sampling, cache | **29/29** | `email`, `ip_address` carry evidence (`pii_likelihood` 0.96) |
+| Java | `gpt-4o-mini` | Java port (Step 28) | **29/29** | Same scores as Run 5 (`email` 0.96, `national_id` → `tckn` 1.00 / 0.93, `social_security_number` `ssn` 0.70) |
 
 ### Run 5 (current)
 

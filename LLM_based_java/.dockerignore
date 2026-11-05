@@ -1,0 +1,6 @@
+.env
+.git
+target
+db
+docs
+*.md
