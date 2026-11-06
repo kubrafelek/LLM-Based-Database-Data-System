@@ -52,12 +52,13 @@ app:
   env: ${APP_ENV:development}
   cors-allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   max-request-body-bytes: ${MAX_REQUEST_BODY_BYTES:65536}
-  auth-username: ${AUTH_USERNAME}
-  auth-password: ${AUTH_PASSWORD}
-  jwt-secret-key: ${JWT_SECRET_KEY}
+  # Empty defaults: AppProperties.validate() reports missing values with a clear message.
+  auth-username: ${AUTH_USERNAME:}
+  auth-password: ${AUTH_PASSWORD:}
+  jwt-secret-key: ${JWT_SECRET_KEY:}
   jwt-algorithm: ${JWT_ALGORITHM:HS256}
   jwt-expire-minutes: ${JWT_EXPIRE_MINUTES:60}
-  encryption-key: ${ENCRYPTION_KEY}
+  encryption-key: ${ENCRYPTION_KEY:}
   llm-base-url: ${LLM_BASE_URL:https://api.openai.com/v1}
   llm-api-key: ${LLM_API_KEY:}
   llm-model: ${LLM_MODEL:gpt-4o-mini}

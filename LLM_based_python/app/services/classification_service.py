@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,7 +49,7 @@ async def classify_column(
         )
 
     # The samples are fetched even on a cache hit: they are what tells us the data is unchanged.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ttl = settings.classification_cache_ttl_seconds
     key = cache_key(column.id, request.sample_count, raw_samples, llm.model, settings)
     if ttl > 0 and not request.force_refresh:

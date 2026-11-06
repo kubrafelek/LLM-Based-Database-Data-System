@@ -1,6 +1,5 @@
 """Access to external (target) PostgreSQL databases: connecting, schema inspection, sampling."""
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -13,7 +12,9 @@ from app.core.exceptions import InvalidRequestError, StaleMetadataError, TargetD
 
 logger = logging.getLogger(__name__)
 
-CONNECT_ERROR = "Could not connect to the target database. Check the connection details and that the database is reachable."
+CONNECT_ERROR = (
+    "Could not connect to the target database. Check the connection details and that the database is reachable."
+)
 EXTRACT_ERROR = "Could not read metadata from the target database."
 SAMPLE_ERROR = "Could not read sample values from the target database."
 
@@ -57,7 +58,7 @@ async def connect_target(info: ConnectionInfo, settings: Settings) -> AsyncItera
                 "application_name": "llm-data-discovery",
             },
         )
-    except (OSError, asyncio.TimeoutError, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+    except (TimeoutError, OSError, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
         # Driver messages can contain user names or server details; keep them out of the response.
         logger.warning("Target DB connection to %s failed: %s", info.describe(), _error_code(exc))
         raise TargetDatabaseError(CONNECT_ERROR) from exc
@@ -159,6 +160,16 @@ async def extract_tables(conn: asyncpg.Connection, schema_name: str | None = Non
 # --- Sampling ---------------------------------------------------------------
 
 
+# Only validated, quoted identifiers are inserted into this template (PostgreSQL cannot bind
+# identifiers as parameters; quoting is what quote_ident() / psycopg.sql.Identifier do too).
+# The only value, the limit, is a bind parameter ($1).
+SAMPLE_QUERY_TEMPLATE = (
+    "SELECT value FROM ("
+    "SELECT DISTINCT left({value}, {max_length}) AS value FROM {source} WHERE {column} IS NOT NULL"
+    ") AS distinct_values ORDER BY md5(value), value LIMIT $1"
+)
+
+
 def build_sample_query(schema_name: str, table_name: str, column_name: str, data_type: str) -> str:
     """Distinct non-null values, cast to text so every type (inet, jsonb, date...) works.
 
@@ -170,12 +181,7 @@ def build_sample_query(schema_name: str, table_name: str, column_name: str, data
     # inet::text appends the netmask ("10.0.0.1/32"); host() gives the plain address.
     value = f"host({column})" if data_type == "inet" else f"{column}::text"
     source = f"{quote_ident(schema_name)}.{quote_ident(table_name)}"
-    return (
-        f"SELECT value FROM ("
-        f"SELECT DISTINCT left({value}, {MAX_VALUE_LENGTH}) AS value "
-        f"FROM {source} WHERE {column} IS NOT NULL"
-        f") AS distinct_values ORDER BY md5(value), value LIMIT $1"
-    )
+    return SAMPLE_QUERY_TEMPLATE.format(value=value, max_length=MAX_VALUE_LENGTH, source=source, column=column)
 
 
 async def fetch_samples(

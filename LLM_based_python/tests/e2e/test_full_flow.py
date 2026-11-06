@@ -39,9 +39,7 @@ async def test_full_business_flow(api, session, target_request, llm_provider):
     email = next(c for c in tables["customers"]["columns"] if c["column_name"] == "email")
 
     # 7. Classify
-    response = await api.post(
-        "/api/v1/classify", json={"column_id": email["column_id"]}, headers=headers
-    )
+    response = await api.post("/api/v1/classify", json={"column_id": email["column_id"]}, headers=headers)
     assert response.status_code == 200, response.text
     result = response.json()
 
@@ -53,11 +51,14 @@ async def test_full_business_flow(api, session, target_request, llm_provider):
     assert result["column_id"] == email["column_id"]
     assert len(llm_provider.requests) == 1
 
-    # 9. Delete; the connection record must survive
+    # 9. Delete; it was the connection's only snapshot, so the stored credentials go too
     response = await api.delete(f"/api/v1/metadata/{metadata_id}", headers=headers)
     assert response.json() == {"metadata_id": metadata_id, "deleted": True}
     assert (await api.get(f"/api/v1/metadata/{metadata_id}", headers=headers)).status_code == 404
-    assert await session.scalar(select(func.count()).select_from(DbConnection)) == 1
+    assert (await api.delete(f"/api/v1/metadata/{metadata_id}", headers=headers)).status_code == 404
+    classify_deleted = await api.post("/api/v1/classify", json={"column_id": email["column_id"]}, headers=headers)
+    assert classify_deleted.status_code == 404
+    assert await session.scalar(select(func.count()).select_from(DbConnection)) == 0
 
 
 async def test_auth_accepts_basic_credentials(api):

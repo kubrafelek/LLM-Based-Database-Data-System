@@ -105,9 +105,7 @@ def build_user_prompt(column: ColumnContext, samples: list[str], masking_mode: M
     return f"Analyze the following database column.\n\nColumn metadata:\n{metadata}\n\n{sample_section}"
 
 
-def build_messages(
-    column: ColumnContext, samples: list[str], masking_mode: MaskingMode
-) -> list[dict[str, str]]:
+def build_messages(column: ColumnContext, samples: list[str], masking_mode: MaskingMode) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": build_user_prompt(column, samples, masking_mode)},

@@ -1,12 +1,10 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, status
-from fastapi.security import HTTPBasicCredentials
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Annotated
 
-from app.api.dependencies import basic_scheme
-from app.core.config import Settings, get_settings
+from fastapi import APIRouter, Body, HTTPException, status
+
+from app.api.dependencies import BasicCredentialsDep, SessionDep, SettingsDep
 from app.core.security import create_access_token
 from app.domain.schemas import LoginRequest, TokenResponse
-from app.infrastructure.database.system_database import get_session
 from app.services import auth_service
 
 router = APIRouter(tags=["auth"])
@@ -14,10 +12,10 @@ router = APIRouter(tags=["auth"])
 
 @router.post("/auth", response_model=TokenResponse)
 async def issue_token(
-    body: LoginRequest | None = Body(default=None),
-    basic: HTTPBasicCredentials | None = Depends(basic_scheme),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
+    session: SessionDep,
+    settings: SettingsDep,
+    basic: BasicCredentialsDep,
+    body: Annotated[LoginRequest | None, Body()] = None,
 ) -> TokenResponse:
     """Exchange credentials for a short-lived Bearer token.
 

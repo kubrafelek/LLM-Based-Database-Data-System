@@ -53,7 +53,17 @@ class MetadataIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void listGetAndDeleteKeepTheConnection() {
+    void deletingTheLastSnapshotDeletesTheStoredConnection() {
+        MetadataDetail first = service.create(targetRequest());
+        MetadataDetail second = service.create(targetRequest());
+        service.delete(first.metadataId());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM db_connections", Integer.class)).isOne(); // `second` uses it
+        service.delete(second.metadataId());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM db_connections", Integer.class)).isZero();
+    }
+
+    @Test
+    void listGetAndDelete() {
         MetadataDetail created = service.create(targetRequest());
 
         assertThat(service.list(50, 0).items()).singleElement()
@@ -64,7 +74,6 @@ class MetadataIntegrationTest extends IntegrationTest {
         assertThatThrownBy(() -> service.get(created.metadataId())).isInstanceOf(AppException.NotFound.class);
         assertThatThrownBy(() -> service.delete(created.metadataId())).isInstanceOf(AppException.NotFound.class);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM db_tables", Integer.class)).isZero();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM db_connections", Integer.class)).isOne();
     }
 
     @Test

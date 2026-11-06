@@ -90,9 +90,13 @@ async def test_list_get_and_delete(session, target_request):
     with pytest.raises(NotFoundError):
         await metadata_service.delete_metadata(session, first.metadata_id)
 
-    # Only the deleted snapshot's tables are gone; the shared connection stays.
+    # Only the deleted snapshot's tables are gone; the connection stays while `second` uses it.
     assert await session.scalar(select(func.count()).select_from(DbTable)) == len(DEMO_RELATIONS)
     assert await session.scalar(select(func.count()).select_from(DbConnection)) == 1
+
+    # Deleting the last snapshot of a connection deletes the stored credentials too.
+    await metadata_service.delete_metadata(session, second.metadata_id)
+    assert await session.scalar(select(func.count()).select_from(DbConnection)) == 0
 
 
 async def test_bad_credentials_give_generic_error_and_no_secret_in_logs(session, target_request, caplog):

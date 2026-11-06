@@ -13,9 +13,7 @@ def chat_completion(content: str) -> dict[str, Any]:
 
 
 def classification_reply(pii_likelihood: float, **probabilities: float) -> str:
-    return json.dumps(
-        {"pii_likelihood": pii_likelihood, "classification": probabilities, "reasoning": "fake"}
-    )
+    return json.dumps({"pii_likelihood": pii_likelihood, "classification": probabilities, "reasoning": "fake"})
 
 
 class FakeLLMProvider:

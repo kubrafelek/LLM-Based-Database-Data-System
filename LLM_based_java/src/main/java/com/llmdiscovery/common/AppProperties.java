@@ -1,8 +1,14 @@
 package com.llmdiscovery.common;
 
 import com.llmdiscovery.classification.MaskingMode;
+import jakarta.annotation.PostConstruct;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -44,6 +50,56 @@ public class AppProperties implements Cloneable {
     private boolean checksumValidationEnabled = true;
     // Reuse a /classify result while the samples and settings are unchanged; 0 disables the cache
     private int classificationCacheTtlSeconds = 86400;
+
+    // The development-only secrets shipped in .env.example. They let `cp .env.example .env` start the
+    // stack as is, and are rejected when APP_ENV=production.
+    static final Set<String> EXAMPLE_SECRETS = Set.of(
+            "dev-only-jwt-secret-change-me-0123456789abcdef", "ZGV2LW9ubHktZW5jcnlwdGlvbi1rZXktMzJieXRlcyE=");
+    static final int MIN_JWT_SECRET_LENGTH = 32;
+
+    /** Fail at startup with a clear message instead of failing on the first request. */
+    @PostConstruct
+    public void validate() {
+        List<String> problems = new ArrayList<>();
+        Map<String, String> required = new LinkedHashMap<>();
+        required.put("AUTH_USERNAME", authUsername);
+        required.put("AUTH_PASSWORD", authPassword);
+        required.forEach((name, value) -> {
+            if (value == null || value.isBlank()) {
+                problems.add(name + " must not be empty");
+            }
+        });
+        if (jwtSecretKey == null || jwtSecretKey.length() < MIN_JWT_SECRET_LENGTH) {
+            problems.add("JWT_SECRET_KEY must be at least " + MIN_JWT_SECRET_LENGTH
+                    + " characters (generate one with: openssl rand -hex 32)");
+        }
+        int keyBytes;
+        try {
+            keyBytes = Base64.getDecoder().decode(encryptionKey == null ? "" : encryptionKey).length;
+        } catch (IllegalArgumentException e) {
+            keyBytes = -1;
+        }
+        if (keyBytes != 32) {
+            problems.add("ENCRYPTION_KEY must be base64 of exactly 32 bytes (generate one with: openssl rand -base64 32)");
+        }
+        if (!List.of("HS256", "HS384", "HS512").contains(jwtAlgorithm)) {
+            problems.add("JWT_ALGORITHM must be HS256, HS384 or HS512");
+        }
+        if ("production".equals(env)) {
+            Map<String, String> secrets = new LinkedHashMap<>();
+            secrets.put("JWT_SECRET_KEY", jwtSecretKey);
+            secrets.put("ENCRYPTION_KEY", encryptionKey);
+            secrets.put("AUTH_PASSWORD", authPassword);
+            secrets.forEach((name, value) -> {
+                if (value != null && (EXAMPLE_SECRETS.contains(value) || value.startsWith("change-me"))) {
+                    problems.add(name + " still has its .env.example value; not allowed with APP_ENV=production");
+                }
+            });
+        }
+        if (!problems.isEmpty()) {
+            throw new InvalidConfigurationException(problems);
+        }
+    }
 
     public List<String> corsOrigins() {
         return Arrays.stream(corsAllowedOrigins.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList();

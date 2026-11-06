@@ -1,16 +1,30 @@
+import base64
+import binascii
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
 from app.domain.enums import MaskingMode
 
+# The development-only secrets shipped in .env.example. They let `cp .env.example .env` start the
+# stack as is, and are rejected when APP_ENV=production.
+EXAMPLE_SECRETS = {
+    "dev-only-jwt-secret-change-me-0123456789abcdef",
+    "ZGV2LW9ubHktZW5jcnlwdGlvbi1rZXktMzJieXRlcyE=",
+}
+MIN_JWT_SECRET_LENGTH = 32
+
 
 class Settings(BaseSettings):
     """All runtime configuration, loaded from environment variables / the .env file."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # hide_input_in_errors: a validation error must not echo the settings (they contain secrets).
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", hide_input_in_errors=True
+    )
 
     # Application
     app_env: Literal["development", "test", "production"] = "development"
@@ -53,6 +67,40 @@ class Settings(BaseSettings):
     checksum_validation_enabled: bool = True
     # Reuse a /classify result while the samples and settings are unchanged; 0 disables the cache
     classification_cache_ttl_seconds: int = 86400
+
+    @model_validator(mode="after")
+    def _check_secrets(self) -> Self:
+        """Fail at startup with a clear message instead of failing on the first request."""
+        problems = []
+        for name in ("system_db_host", "system_db_name", "system_db_user", "auth_username", "auth_password"):
+            if not getattr(self, name).strip():
+                problems.append(f"{name.upper()} must not be empty")
+        if len(self.jwt_secret_key) < MIN_JWT_SECRET_LENGTH:
+            problems.append(
+                f"JWT_SECRET_KEY must be at least {MIN_JWT_SECRET_LENGTH} characters "
+                "(generate one with: openssl rand -hex 32)"
+            )
+        try:
+            key_bytes = len(base64.b64decode(self.encryption_key, validate=True))
+        except (binascii.Error, ValueError):
+            key_bytes = -1
+        if key_bytes != 32:
+            problems.append(
+                "ENCRYPTION_KEY must be base64 of exactly 32 bytes (generate one with: openssl rand -base64 32)"
+            )
+        if self.app_env == "production":
+            secrets = {
+                "JWT_SECRET_KEY": self.jwt_secret_key,
+                "ENCRYPTION_KEY": self.encryption_key,
+                "AUTH_PASSWORD": self.auth_password,
+                "SYSTEM_DB_PASSWORD": self.system_db_password,
+            }
+            for name, value in secrets.items():
+                if value in EXAMPLE_SECRETS or value.startswith("change-me"):
+                    problems.append(f"{name} still has its .env.example value; not allowed with APP_ENV=production")
+        if problems:
+            raise ValueError("Invalid configuration in .env:\n  - " + "\n  - ".join(problems))
+        return self
 
     @property
     def cors_origins(self) -> list[str]:

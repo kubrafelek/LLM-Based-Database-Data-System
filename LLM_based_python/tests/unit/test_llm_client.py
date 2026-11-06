@@ -71,7 +71,10 @@ async def test_empty_api_key_sends_no_authorization_header():
         return ok('{"a": 1}')
 
     client = LLMClient(
-        base_url="http://llm.test/v1", api_key="", model="m", timeout=5,
+        base_url="http://llm.test/v1",
+        api_key="",
+        model="m",
+        timeout=5,
         transport=httpx.MockTransport(handler),
     )
     await client.complete_json([], identity)
@@ -85,9 +88,7 @@ async def test_json_mode_can_be_disabled():
 
 
 async def test_retries_transient_failures():
-    client, seen = make_client(
-        [httpx.Response(503), httpx.ConnectTimeout("slow"), ok('{"a": 1}')], max_retries=2
-    )
+    client, seen = make_client([httpx.Response(503), httpx.ConnectTimeout("slow"), ok('{"a": 1}')], max_retries=2)
     assert await client.complete_json([], identity) == {"a": 1}
     assert len(seen) == 3
 

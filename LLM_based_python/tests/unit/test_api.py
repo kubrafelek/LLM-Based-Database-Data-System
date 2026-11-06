@@ -117,3 +117,20 @@ def test_cors_is_disabled_by_default():
         headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"},
     )
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_unexpected_errors_return_generic_json():
+    from app.infrastructure.database.system_database import get_session
+
+    async def broken_session():
+        raise RuntimeError("driver said: password authentication failed for user x")
+        yield  # pragma: no cover
+
+    app.dependency_overrides[get_session] = broken_session
+    try:
+        response = TestClient(app, raise_server_exceptions=False).get("/api/v1/metadata", headers=auth_header())
+    finally:
+        app.dependency_overrides.clear()
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal Server Error"}
+    assert "password" not in response.text

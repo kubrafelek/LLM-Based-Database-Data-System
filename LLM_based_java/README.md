@@ -31,7 +31,7 @@ Client ── /api/v1/* ──> AuthenticationFilter ──> Controllers ──>
 | System DB | Spring Data JPA (Hibernate 6), `JdbcTemplate` for upserts/JSONB, Flyway migrations |
 | Target DBs | PostgreSQL JDBC driver (`PGSimpleDataSource`) |
 | LLM | Spring `RestClient` on the JDK `HttpClient` |
-| Security | `spring-security-crypto` Argon2id (Bouncy Castle), jjwt (HS256), JCA AES-GCM |
+| Security | Spring Security (stateless `SecurityFilterChain`, Bearer or Basic), Argon2id (Bouncy Castle), jjwt (HS256), JCA AES-GCM |
 | Docs | springdoc-openapi (Swagger UI at `/docs`) |
 | Tests | JUnit 5, AssertJ, Spring Boot Test |
 
@@ -47,7 +47,9 @@ Same variables as the Python service (see its [README](../LLM_based_python/READM
 cp .env.example .env
 # Fill in: SYSTEM_DB_PASSWORD, AUTH_PASSWORD, JWT_SECRET_KEY (≥ 32 bytes), ENCRYPTION_KEY (base64 32 bytes),
 #          LLM_API_KEY, DEMO_DB_PASSWORD, DEMO_DB_READONLY_PASSWORD
-python3 -c "import secrets,base64;print(secrets.token_urlsafe(48));print(base64.b64encode(secrets.token_bytes(32)).decode())"
+# .env.example ships development-only keys, so the stack starts as is. For anything shared:
+sed -i.bak "s|^JWT_SECRET_KEY=.*|JWT_SECRET_KEY=$(openssl rand -hex 32)|" .env
+sed -i.bak "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$(openssl rand -base64 32)|" .env && rm .env.bak
 ```
 
 `JWT_SECRET_KEY` must be at least 32 bytes for HS256 (jjwt refuses weaker keys).
@@ -123,4 +125,4 @@ The same controls as the Python service ([Security Considerations](../LLM_based_
 
 ## Differences from the Python service
 
-See [MIGRATION_REPORT.md §8](docs/MIGRATION_REPORT.md#8-remaining-differences-accepted): stricter ASCII-only digit checks, a slightly smaller validation error body, separate cache keys when sharing a system DB, a servlet filter instead of Spring Security's filter chain, and compose test databases instead of Testcontainers.
+See [MIGRATION_REPORT.md §8](docs/MIGRATION_REPORT.md#8-remaining-differences-accepted): stricter ASCII-only digit checks, a slightly smaller validation error body, separate cache keys when sharing a system DB, and compose test databases instead of Testcontainers.

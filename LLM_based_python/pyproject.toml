@@ -9,3 +9,29 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "--cov=app --cov-report=term-missing:skip-covered --cov-report=xml"
+filterwarnings = [
+    # Starlette's TestClient warning about the httpx package (raised at import); not actionable here.
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated",
+]
+
+[tool.coverage.run]
+branch = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[tool.ruff.lint.per-file-ignores]
+# The prompt text is one sentence per line on purpose; wrapping it would change what the LLM sees
+# (and the Java port's byte-identical prompt check).
+"app/infrastructure/llm/prompts.py" = ["E501"]

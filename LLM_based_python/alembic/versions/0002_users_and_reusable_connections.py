@@ -4,7 +4,9 @@ Revision ID: 0002
 Revises: 0001
 Create Date: 2026-11-05
 """
+
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0002"
@@ -33,15 +35,10 @@ def upgrade() -> None:
     # db_metadata: point at the connection instead of the other way around
     op.add_column("db_metadata", sa.Column("connection_id", sa.Uuid(), nullable=True))
     op.add_column("db_metadata", sa.Column("schema_name", sa.String(255), nullable=True))
-    op.add_column(
-        "db_metadata", sa.Column("table_count", sa.Integer(), server_default="0", nullable=False)
-    )
+    op.add_column("db_metadata", sa.Column("table_count", sa.Integer(), server_default="0", nullable=False))
+    op.execute("UPDATE db_metadata m SET connection_id = c.id FROM db_connections c WHERE c.metadata_id = m.id")
     op.execute(
-        "UPDATE db_metadata m SET connection_id = c.id FROM db_connections c WHERE c.metadata_id = m.id"
-    )
-    op.execute(
-        "UPDATE db_metadata m SET table_count = "
-        "(SELECT count(*) FROM db_tables t WHERE t.metadata_id = m.id)"
+        "UPDATE db_metadata m SET table_count = " "(SELECT count(*) FROM db_tables t WHERE t.metadata_id = m.id)"
     )
 
     # Collapse duplicate connections to the most recent row (latest password) before

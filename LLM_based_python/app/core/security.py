@@ -2,7 +2,7 @@ import base64
 import binascii
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 
 import jwt
@@ -38,7 +38,7 @@ def dummy_password_hash() -> str:
 
 def create_access_token(subject: str, settings: Settings) -> tuple[str, int]:
     expires_in = settings.jwt_expire_minutes * 60
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {"sub": subject, "iat": now, "exp": now + timedelta(seconds=expires_in)}
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return token, expires_in
@@ -81,7 +81,5 @@ class SecretCipher:
             raw = base64.b64decode(token, validate=True)
             plaintext = self._aesgcm.decrypt(raw[:NONCE_SIZE], raw[NONCE_SIZE:], None)
         except (binascii.Error, InvalidTag, ValueError) as exc:
-            raise DecryptionError(
-                "Stored credentials could not be decrypted (was ENCRYPTION_KEY changed?)"
-            ) from exc
+            raise DecryptionError("Stored credentials could not be decrypted (was ENCRYPTION_KEY changed?)") from exc
         return plaintext.decode()

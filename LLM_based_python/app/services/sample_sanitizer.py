@@ -23,9 +23,7 @@ def mask_sample(value: str, mode: MaskingMode) -> str:
 
 def _mask_partial(value: str) -> str:
     """Hide identifying parts while keeping the format the classifier relies on."""
-    value = EMAIL_PATTERN.sub(
-        lambda m: m.group(1)[0] + MASK_CHAR * (len(m.group(1)) - 1) + "@" + m.group(2), value
-    )
+    value = EMAIL_PATTERN.sub(lambda m: m.group(1)[0] + MASK_CHAR * (len(m.group(1)) - 1) + "@" + m.group(2), value)
     digit_count = sum(ch.isdigit() for ch in value)
     if digit_count < MIN_DIGITS_TO_MASK:
         return value
@@ -44,6 +42,4 @@ def _mask_partial(value: str) -> str:
 
 def _mask_strict(value: str) -> str:
     """Keep only the shape: letters -> x/X, digits -> 9, everything else unchanged."""
-    return "".join(
-        ("X" if ch.isupper() else "x") if ch.isalpha() else "9" if ch.isdigit() else ch for ch in value
-    )
+    return "".join(("X" if ch.isupper() else "x") if ch.isalpha() else "9" if ch.isdigit() else ch for ch in value)

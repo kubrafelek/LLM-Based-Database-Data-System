@@ -13,7 +13,10 @@ public interface MetadataRepository extends JpaRepository<DbMetadata, UUID> {
     @Query("select m from DbMetadata m join fetch m.connection where m.id = :id")
     Optional<DbMetadata> findWithConnection(@Param("id") UUID id);
 
-    /** Delete a snapshot. Tables, columns and cached results go via ON DELETE CASCADE; the connection is kept. */
+    @Query("select m.connection.id from DbMetadata m where m.id = :id")
+    Optional<UUID> findConnectionId(@Param("id") UUID id);
+
+    /** Delete a snapshot. Tables, columns and cached results go via ON DELETE CASCADE. */
     @Modifying
     @Query("delete from DbMetadata m where m.id = :id")
     int deleteSnapshot(@Param("id") UUID id);

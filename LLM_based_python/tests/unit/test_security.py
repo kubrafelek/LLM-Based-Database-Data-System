@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
@@ -68,7 +68,7 @@ def test_token_round_trip():
 
 def test_expired_token_is_rejected():
     settings = get_settings()
-    past = datetime.now(timezone.utc) - timedelta(minutes=5)
+    past = datetime.now(UTC) - timedelta(minutes=5)
     token = jwt.encode({"sub": "admin", "exp": past}, settings.jwt_secret_key, algorithm="HS256")
     with pytest.raises(jwt.ExpiredSignatureError):
         decode_access_token(token, settings)
@@ -76,9 +76,7 @@ def test_expired_token_is_rejected():
 
 def test_token_signed_with_other_key_is_rejected():
     settings = get_settings()
-    future = datetime.now(timezone.utc) + timedelta(minutes=5)
-    token = jwt.encode(
-        {"sub": "admin", "exp": future}, "another-secret-key-of-sufficient-length", algorithm="HS256"
-    )
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    token = jwt.encode({"sub": "admin", "exp": future}, "another-secret-key-of-sufficient-length", algorithm="HS256")
     with pytest.raises(jwt.InvalidSignatureError):
         decode_access_token(token, settings)

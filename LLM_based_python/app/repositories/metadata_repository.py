@@ -1,6 +1,7 @@
 from uuid import UUID
 
-from sqlalchemy import Row, delete, func, select
+from sqlalchemy import Row, delete, exists, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -39,9 +40,29 @@ async def get_with_tables(session: AsyncSession, metadata_id: UUID) -> DbMetadat
 
 
 async def delete_by_id(session: AsyncSession, metadata_id: UUID) -> bool:
-    """Delete a snapshot. Tables and columns go via ON DELETE CASCADE; the connection is kept."""
-    result = await session.execute(delete(DbMetadata).where(DbMetadata.id == metadata_id))
-    return result.rowcount > 0
+    """Delete a snapshot. Tables, columns and cached results go via ON DELETE CASCADE.
+
+    The stored connection (with its encrypted password) is deleted too once no other snapshot
+    uses it: credentials are not kept longer than they are needed.
+    """
+    connection_id = await session.scalar(
+        delete(DbMetadata).where(DbMetadata.id == metadata_id).returning(DbMetadata.connection_id)
+    )
+    if connection_id is None:
+        return False
+    try:
+        # Savepoint: a snapshot created concurrently for the same connection makes the FK
+        # (ON DELETE RESTRICT) reject this; the connection is then simply kept.
+        async with session.begin_nested():
+            await session.execute(
+                delete(DbConnection).where(
+                    DbConnection.id == connection_id,
+                    ~exists().where(DbMetadata.connection_id == connection_id),
+                )
+            )
+    except IntegrityError:
+        pass
+    return True
 
 
 async def get_column_context(

@@ -18,7 +18,7 @@ def llm_provider() -> FakeLLMProvider:
 
 
 @pytest.fixture
-async def api(sessionmaker, llm_provider) -> AsyncIterator[httpx.AsyncClient]:
+async def api(sessionmaker, llm_provider) -> AsyncIterator[httpx.AsyncClient]:  # noqa: F811 (pytest fixture)
     """The real app over ASGI, with the test system DB and a fake LLM provider."""
 
     async def test_session():

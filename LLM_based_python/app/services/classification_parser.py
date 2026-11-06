@@ -11,9 +11,7 @@ PROBABILITY_DECIMALS = 4
 PROBABILITY_SUM_TOLERANCE = 1e-3
 
 # Returned when no category fits: maximal uncertainty, still a distribution summing to 1.
-UNIFORM_DISTRIBUTION = {
-    category: round(1 / len(PiiCategory), PROBABILITY_DECIMALS) for category in PiiCategory
-}
+UNIFORM_DISTRIBUTION = {category: round(1 / len(PiiCategory), PROBABILITY_DECIMALS) for category in PiiCategory}
 
 
 @dataclass

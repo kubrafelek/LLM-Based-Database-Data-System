@@ -115,9 +115,7 @@ def collect_evidence(raw_samples: list[str]) -> list[ChecksumEvidence]:
             ChecksumEvidence(PiiCategory.TCKN, "tckn_checksum", tckn_valid, len(values), TCKN_CHECKSUM_WEIGHT)
         )
     elif tckn_format >= MIN_MATCH_RATIO * len(values):
-        evidence.append(
-            ChecksumEvidence(PiiCategory.TCKN, "tckn_format", tckn_format, len(values), TCKN_FORMAT_WEIGHT)
-        )
+        evidence.append(ChecksumEvidence(PiiCategory.TCKN, "tckn_format", tckn_format, len(values), TCKN_FORMAT_WEIGHT))
 
     for category, check, predicate, weight in SIMPLE_CHECKS:
         matched = passes(predicate)

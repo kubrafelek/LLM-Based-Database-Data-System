@@ -12,6 +12,8 @@ Environment (defaults come from the app's .env):
     DEMO_DB_HOST   default demo-db
     DEMO_DB_NAME; DEMO_DB_READONLY_USER / _PASSWORD (falls back to DEMO_DB_USER / _PASSWORD)
     SAMPLE_COUNT   default 10
+    REPEAT         classify every column this many times, bypassing the cache, and report
+                   whether the outcome is stable (temperature=0 is not fully deterministic); default 1
     REQUEST_TIMEOUT seconds per classification, default 600
 """
 
@@ -25,6 +27,7 @@ import urllib.request
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000/api/v1").rstrip("/")
 SAMPLE_COUNT = int(os.environ.get("SAMPLE_COUNT", "10"))
+REPEAT = max(1, int(os.environ.get("REPEAT", "1")))
 TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", "600"))
 PII_THRESHOLD = 0.5
 NOT_PII = "not_pii"
@@ -39,6 +42,7 @@ EXPECTED: dict[tuple[str, str], tuple[str, ...]] = {
     ("customers", "phone_number"): ("phone_number",),
     ("customers", "date_of_birth"): ("date_of_birth",),
     ("customers", "national_id"): ("tckn",),
+    ("customers", "customer_uuid"): (NOT_PII,),  # random identifier, not personal data by itself
     ("customers", "gender"): (NOT_PII,),
     ("customers", "registration_date"): (NOT_PII,),
     ("customers", "customer_notes"): (NOT_PII,),
@@ -60,6 +64,8 @@ EXPECTED: dict[tuple[str, str], tuple[str, ...]] = {
     ("orders", "notes"): (NOT_PII,),
     ("audit_logs", "ip_address"): ("ip_address",),
     ("audit_logs", "user_agent"): (NOT_PII,),
+    # JSONB change sets: one of five rows embeds a name and an email, the rest are statuses and numbers.
+    ("audit_logs", "new_values"): (NOT_PII, "email_address", "first_name", "full_name"),
     ("products", "product_name"): (NOT_PII,),
     ("products", "unit_price"): (NOT_PII,),
 }
@@ -82,9 +88,7 @@ def request(method: str, path: str, token: str | None = None, body: dict | None 
 
 
 def main() -> int:
-    status, body = request(
-        "POST", "/auth", basic=(os.environ["AUTH_USERNAME"], os.environ["AUTH_PASSWORD"])
-    )
+    status, body = request("POST", "/auth", basic=(os.environ["AUTH_USERNAME"], os.environ["AUTH_PASSWORD"]))
     if status != 200:
         print(f"auth failed: {status} {body}", file=sys.stderr)
         return 1
@@ -111,34 +115,55 @@ def main() -> int:
         for column in table["columns"]
     }
 
-    print("| Column | Expected | Predicted | P(pred) | pii_likelihood | Outcome | ✓ | Time |")
-    print("|---|---|---|---|---|---|---|---|")
-    passed = 0
+    stability = f" Stable ×{REPEAT} |" if REPEAT > 1 else ""
+    print(f"| Column | Expected | Predicted | P(pred) | pii_likelihood | Outcome | ✓ | Time |{stability}")
+    print("|---|---|---|---|---|---|---|---|" + ("---|" if REPEAT > 1 else ""))
+    passed = stable = llm_stable = 0
     for (table, column), acceptable in EXPECTED.items():
+        expected = " / ".join(acceptable)
+        body = {"column_id": column_ids[(table, column)], "sample_count": SAMPLE_COUNT}
+        if REPEAT > 1:
+            body["force_refresh"] = True  # measure the LLM, not the cache
         started = time.monotonic()
-        status, result = request(
-            "POST", "/classify", token, {"column_id": column_ids[(table, column)], "sample_count": SAMPLE_COUNT}
-        )
-        elapsed = time.monotonic() - started
-        if status != 200:
-            print(f"| {table}.{column} | {' / '.join(acceptable)} | error {status}: {result} | | | | ❌ | {elapsed:.0f}s |")
+        runs = [request("POST", "/classify", token, body) for _ in range(REPEAT)]
+        elapsed = (time.monotonic() - started) / REPEAT
+        errors = [result for status, result in runs if status != 200]
+        if errors:
+            print(f"| {table}.{column} | {expected} | error: {errors[0]} | | | | ❌ | {elapsed:.0f}s |")
             continue
+        results = [result for _, result in runs]
+        outcomes = [outcome_of(r) for r in results]
+        result = results[0]
         predicted = result["predicted_category"]  # null when no category fits
-        likelihood = result["pii_likelihood"]
-        outcome = predicted if predicted is not None and likelihood >= PII_THRESHOLD else NOT_PII
-        ok = outcome in acceptable
+        ok = outcomes[0] in acceptable
         passed += ok
         probability = f"{result['classification'][predicted]:.2f}" if predicted else "–"
-        print(
-            f"| {table}.{column} | {' / '.join(acceptable)} | {predicted or '(none)'} | "
-            f"{probability} | {likelihood:.2f} | {outcome} | "
-            f"{'✅' if ok else '❌'} | {elapsed:.0f}s |",
-            flush=True,
+        row = (
+            f"| {table}.{column} | {expected} | {predicted or '(none)'} | {probability} | "
+            f"{result['pii_likelihood']:.2f} | {outcomes[0]} | {'✅' if ok else '❌'} | {elapsed:.0f}s |"
         )
+        if REPEAT > 1:
+            is_stable = len(set(outcomes)) == 1
+            stable += is_stable
+            # The LLM's own top category, before the deterministic checks are fused in.
+            llm_stable += len({max(r["llm_classification"], key=r["llm_classification"].get) for r in results}) == 1
+            row += f" {'✅' if is_stable else '❌ ' + ', '.join(outcomes)} |"
+        print(row, flush=True)
 
     request("DELETE", f"/metadata/{metadata['metadata_id']}", token)
     print(f"\n**{passed}/{len(EXPECTED)} columns as expected** (sample_count={SAMPLE_COUNT})")
+    if REPEAT > 1:
+        print(
+            f"**{stable}/{len(EXPECTED)} outcomes identical across {REPEAT} runs** "
+            f"(LLM top category alone: {llm_stable}/{len(EXPECTED)})"
+        )
     return 0
+
+
+def outcome_of(result: dict) -> str:
+    """The predicted category when pii_likelihood >= 0.5, otherwise not_pii."""
+    predicted = result["predicted_category"]
+    return predicted if predicted is not None and result["pii_likelihood"] >= PII_THRESHOLD else NOT_PII
 
 
 if __name__ == "__main__":

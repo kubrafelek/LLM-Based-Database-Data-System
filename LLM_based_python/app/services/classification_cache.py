@@ -27,9 +27,7 @@ def sample_fingerprint(raw_samples: list[str], secret: str) -> str:
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
-def cache_key(
-    column_id: uuid.UUID, sample_count: int, raw_samples: list[str], model: str, settings: Settings
-) -> str:
+def cache_key(column_id: uuid.UUID, sample_count: int, raw_samples: list[str], model: str, settings: Settings) -> str:
     parts = {
         "column_id": str(column_id),
         "sample_count": sample_count,

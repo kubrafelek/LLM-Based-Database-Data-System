@@ -1,7 +1,7 @@
 import logging
-from pathlib import Path
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,9 +56,7 @@ if settings.cors_origins:
 
 
 @app.middleware("http")
-async def limit_request_body(
-    request: Request, call_next: Callable[[Request], Awaitable[Response]]
-) -> Response:
+async def limit_request_body(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > settings.max_request_body_bytes:
         return JSONResponse(
@@ -78,13 +76,18 @@ UI_SECURITY_HEADERS = {
 
 
 @app.middleware("http")
-async def ui_security_headers(
-    request: Request, call_next: Callable[[Request], Awaitable[Response]]
-) -> Response:
+async def ui_security_headers(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     response = await call_next(request)
     if request.url.path.startswith("/ui"):
         response.headers.update(UI_SECURITY_HEADERS)
     return response
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
+    """Anything unexpected: the same JSON shape, no stack trace or driver message in the response."""
+    logger.exception("Unhandled error: %s", exc.__class__.__name__)
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 @app.exception_handler(AppError)

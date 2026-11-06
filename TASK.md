@@ -23,7 +23,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | 6 | Metadata CRUD | ✅ | Under `/api/v1` (plus PDF root-path aliases); delete keeps the connection; pagination |
 | 7 | LLM classification engine | ✅ | `httpx` `LLMClient`, masking, 12-key distribution + `pii_likelihood`, validation/normalization, retries, deterministic checks (TCKN, Luhn, email, IP) fused into the result, result cache |
 | 8 | Security & validation | ✅ | All spec §9 controls (see §3); SELECT-only target login (D16) |
-| 9 | Testing & QA | ✅ | 187 tests (155 unit, 27 integration, 5 e2e) + 37 black-box contract tests, see §6 |
+| 9 | Testing & QA | ✅ | Python 203 tests (coverage 97%), Java 169 (coverage 90%), 37 contract tests passing on both; CI in `.github/workflows/ci.yml` |
 | 10 | Docker & documentation | ✅ | Compose (app, system-db, demo-db + test profile); README covers spec §13; web UI at `/ui/` |
 | 11 | Java migration (AI-assisted) | ✅ | Spring Boot 3.3 / Java 21 in `LLM_based_java/`; 161 JUnit tests (102 golden); Python contract suite 37/37; evaluation 29/29 (D18, D19) |
 
@@ -123,6 +123,7 @@ Legend: ✅ Done · 🟡 Partial (works, but deviates from the spec) · ⬜ Not 
 | D17 | Repository layout | Two self-contained implementation folders, `LLM_based_python/` and `LLM_based_java/`, each with its own compose file, `.env.example`, README and demo DB scripts; root keeps an overview README, `TASK.md`, `LICENSE`. Compose project names are fixed (`name: llm-python`, later `llm-java`) so container/volume names don't depend on the folder. The Java port is organized by feature module (`auth`, `discovery`, `classification`, `common`) so each can be ported and compared with its Python counterpart independently |
 | D18 | Java stack | Java 21, Spring Boot 3.3, Maven. System DB: Spring Data JPA + Flyway `V1` (same schema as Alembic 0001–0003, `baseline-on-migrate` so a Python-created DB can be shared), `JdbcTemplate` for the connection upsert and the JSONB cache. Target DBs: JDBC via `PGSimpleDataSource` set field by field. LLM: `RestClient` on JDK `HttpClient`. Auth: servlet filter (Bearer or Basic) + `spring-security-crypto` Argon2id with argon2-cffi's parameters + jjwt HS256, so hashes and tokens are interchangeable with Python. Errors: `{"detail"}`, validation 422. Same env var names; host ports 8080 / 5434 |
 | D19 | Migration verification | The Python contract suite runs unchanged against Java (compose `contract` profile builds the Python test image). Golden data generated from the Python reference (`LLM_based_java/scripts/generate_golden.py` → `golden.json`) is asserted by `GoldenTest`. JUnit integration tests use compose tmpfs DBs (like the Python suite) instead of Testcontainers. Rule: fix the port, never the specification |
+| D20 | Out-of-the-box start vs. secrets | `.env.example` contains clearly labeled development-only `JWT_SECRET_KEY` / `ENCRYPTION_KEY`; both services validate secrets at startup and refuse example values when `APP_ENV=production`. Stored connection is deleted with its last snapshot (supersedes "connection is kept" in D6/D16) |
 | D11 | Web UI | Static HTML/JS/CSS in `app/static`, served at `/ui/` (`/` redirects). No build step or CDN; same origin, so no CORS. Strict CSP response header; token in `sessionStorage` |
 
 ---
@@ -258,6 +259,14 @@ Run with `docker compose --profile test run --build --rm tests mvn -B test` in `
 - **Contract suite (D14):** `tests/contract` + compose service `contract-tests` (profile `contract`); skipped unless `CONTRACT_BASE_URL` is set. 37/37 against the Python service.
 - **README (D15):** "Design Decisions & Assumptions" table answering the open questions; sections for the cache, the new checks and contract tests.
 - Evaluation after these changes: still 29/29 (email and IP now also carry evidence: `pii_likelihood` 0.96).
+
+### Quality checklist round (Step 29, D20)
+- Startup validation of secrets in both services (clear message; example secrets rejected with `APP_ENV=production`); `.env.example` ships dev-only keys so `cp .env.example .env && docker compose up` works. Python hides settings in validation errors (`hide_input_in_errors`).
+- Stored connection deleted together with its last snapshot (both services; tests updated).
+- Python: generic JSON 500 handler; FastAPI `Annotated` dependencies; sampling SQL as a template of quoted identifiers only; pinned dependencies; ruff (lint + format), mypy clean, pytest-cov 97%; `pip-audit`: no known vulnerabilities; tests for config validation, prompt injection, unexpected errors.
+- Java: Spring Security `SecurityFilterChain` instead of the servlet filter; `FailureAnalyzer` for invalid `.env`; Mockito tests for `ClassificationService`; JaCoCo 90%.
+- Evaluation script: +`customers.customer_uuid`, +`audit_logs.new_values`, `REPEAT` stability mode. Both services: 31/31 as expected; 30/31 outcomes identical over 3 uncached runs (the unstable one is a "zor" column: `new_values` in Python, `tax_number` in Java, both within the accepted outcomes).
+- README: why two DBs, why JWT, `table_count` = 8 tables + 1 view, HTTPS note, key rotation, startup validation. CI workflow for both projects.
 
 ### Java migration (Step 28, D18, D19)
 Full record: `LLM_based_java/docs/MIGRATION_REPORT.md` (tool, prompts, steps, corrections, verification).

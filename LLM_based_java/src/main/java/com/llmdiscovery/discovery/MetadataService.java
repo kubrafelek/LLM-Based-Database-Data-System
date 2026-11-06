@@ -14,6 +14,7 @@ import java.sql.SQLException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -100,12 +101,22 @@ public class MetadataService {
         });
     }
 
+    /**
+     * Delete a snapshot with its tables, columns and cached results. The stored connection is deleted
+     * too once no other snapshot uses it: credentials are not kept longer than they are needed.
+     */
     public void delete(UUID metadataId) {
-        transaction.executeWithoutResult(status -> {
-            if (metadata.deleteSnapshot(metadataId) == 0) {
-                throw new AppException.NotFound("Metadata " + metadataId + " not found");
-            }
+        UUID connectionId = transaction.execute(status -> {
+            UUID id = metadata.findConnectionId(metadataId)
+                    .orElseThrow(() -> new AppException.NotFound("Metadata " + metadataId + " not found"));
+            metadata.deleteSnapshot(metadataId);
+            return id;
         });
+        try {
+            transaction.executeWithoutResult(status -> connections.deleteIfUnused(connectionId));
+        } catch (DataIntegrityViolationException e) {
+            // A snapshot created concurrently for the same connection (FK ON DELETE RESTRICT): keep it.
+        }
     }
 
     private static MetadataDetail toDetail(DbMetadata snapshot, UUID connectionId, String host, int port) {
