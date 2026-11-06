@@ -27,7 +27,7 @@ Client ── /api/v1/* ──> AuthenticationFilter ──> Controllers ──>
 
 | Purpose | Library |
 |---|---|
-| Runtime | Java 21, Spring Boot 3.3 (Web MVC, Validation) |
+| Runtime | Java 21, Spring Boot 3.5 (Web MVC, Validation) |
 | System DB | Spring Data JPA (Hibernate 6), `JdbcTemplate` for upserts/JSONB, Flyway migrations |
 | Target DBs | PostgreSQL JDBC driver (`PGSimpleDataSource`) |
 | LLM | Spring `RestClient` on the JDK `HttpClient` |

@@ -98,19 +98,19 @@ public class LlmClient {
         if (jsonMode) {
             body.put("response_format", Map.of("type", "json_object"));
         }
-        int attempts = parseRetries + 1;
-        IllegalArgumentException lastError = null;
+        int attempts = Math.max(1, parseRetries + 1);
+        String lastError = "no attempt made";
         for (int attempt = 1; attempt <= attempts; attempt++) {
             String content = send(body);
             try {
                 return parse.apply(extractJsonObject(content));
             } catch (IllegalArgumentException e) {
-                lastError = e;
+                lastError = e.getMessage();
                 log.warn("Unusable LLM response (attempt {}/{}): {}", attempt, attempts, e.getMessage());
             }
         }
         throw new AppException.Llm("LLM returned an unusable response after " + attempts + " attempts: "
-                + lastError.getMessage());
+                + lastError);
     }
 
     private record Reply(int status, String body) {}

@@ -150,6 +150,7 @@ A second user prompt, a QA checklist pasted verbatim (*"LLM Data Discovery – K
 - **Stored connection deleted with its last snapshot** (same rule as Python).
 - **Tests:** Mockito tests for `ClassificationService` (cache hit skips the LLM, validation before any DB access, checksum evidence over a "no category" LLM answer); JaCoCo coverage (90% lines). Total 169 JUnit tests.
 - **Evaluation** with 31 columns, 3 runs each, cache bypassed: 31/31 as expected; 30/31 identical across runs.
+- **Dependency audit:** the port was generated on Spring Boot 3.3.5 (the AI's default), which is past OSS support and pulled a PostgreSQL driver with known CVEs; Bouncy Castle 1.78.1 and Guava 33.3.1 were also flagged. Upgraded to Spring Boot 3.5.16, Bouncy Castle 1.86, Guava 33.8.0, springdoc 2.8.17; all suites passed unchanged. Lesson: AI-chosen dependency versions reflect its training data, so they need an explicit audit.
 
 ## 11. Parts not trusted to the AI, and time
 

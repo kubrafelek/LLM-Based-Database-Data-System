@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: LLM_based_python
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint
+        run: |
+          pip install ruff==0.6.9
+          ruff check .
+          ruff format --check .
+      - name: Tests (unit, integration, e2e) with coverage
+        run: |
+          cp .env.example .env
+          docker compose --profile test run --build --rm tests
+
+  java:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: LLM_based_java
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tests (golden, unit, integration) with coverage
+        run: |
+          cp .env.example .env
+          docker compose --profile test run --build --rm tests mvn -B test

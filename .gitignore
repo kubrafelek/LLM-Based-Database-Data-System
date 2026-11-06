@@ -8,4 +8,4 @@ venv/
 .vscode/
 .DS_Store
 target/
-.github/
+.github/modernize/

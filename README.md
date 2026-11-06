@@ -5,7 +5,7 @@ Discovers the schema of PostgreSQL databases and classifies columns into 12 PII 
 | Folder | Task | Stack | Status |
 |---|---|---|---|
 | [LLM_based_python/](LLM_based_python/) | Task 1: reference implementation | Python 3.12, FastAPI, PostgreSQL, Docker Compose | Complete |
-| [LLM_based_java/](LLM_based_java/) | Task 2: AI-assisted Java port ([migration report](LLM_based_java/docs/MIGRATION_REPORT.md)) | Java 21, Spring Boot 3.3, PostgreSQL, Docker Compose | Complete |
+| [LLM_based_java/](LLM_based_java/) | Task 2: AI-assisted Java port ([migration report](LLM_based_java/docs/MIGRATION_REPORT.md)) | Java 21, Spring Boot 3.5, PostgreSQL, Docker Compose | Complete |
 
 Each folder is self-contained: its own `docker-compose.yml`, `.env.example`, README and demo database. Start one with:
 
