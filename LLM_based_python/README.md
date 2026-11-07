@@ -1,186 +1,365 @@
 # LLM Data Discovery: Python implementation
 
-> Task 1 of the case study. The Java port (Task 2) is in [../LLM_based_java](../LLM_based_java/); see the [repository README](../README.md). All commands below run from this folder (`cd LLM_based_python`).
+A FastAPI service that connects to a PostgreSQL database, stores its schema metadata, and classifies columns into 12 PII categories with an OpenAI-compatible LLM.
 
-A FastAPI service that connects to PostgreSQL databases, extracts and stores their schema metadata, and classifies columns into 12 PII categories. It samples column values, masks them, and asks an OpenAI-compatible LLM for a probability distribution.
+> Task 1 of the case study. The Java port is in [../LLM_based_java](../LLM_based_java/). All commands below run from this folder (`cd LLM_based_python`).
+
+**PII categories**: `email_address`, `phone_number`, `ssn`, `credit_card_number`, `national_id_number`, `full_name`, `first_name`, `last_name`, `tckn`, `home_address`, `date_of_birth`, `ip_address`.
 
 ## Architecture
 
-A modular monolith with layered responsibilities. Routes contain no SQL, prompts or business logic.
-
 ```mermaid
 flowchart LR
-    Client -->|JSON / Basic → Bearer| API[FastAPI<br/>app/api]
-    API --> SVC[Services<br/>app/services]
-    SVC --> REPO[Repositories<br/>app/repositories]
-    REPO -->|SQLAlchemy + Alembic| SYS[(system-db<br/>users, metadata,<br/>encrypted credentials)]
-    SVC -->|asyncpg, read-only| TGT[(target DB<br/>e.g. demo-db)]
-    SVC -->|httpx LLMClient| LLM[OpenAI-compatible LLM]
+    Client -->|JWT / Basic| API[FastAPI routes]
+    API --> SVC[Services]
+    SVC --> REPO[Repositories]
+    REPO --> SYS[(system-db)]
+    SVC -->|read-only| TGT[(target DB, e.g. demo-db)]
+    SVC --> LLM[OpenAI-compatible LLM]
 ```
 
-```
-app/
-  api/
-    routes/            auth.py, metadata.py, classification.py: HTTP only
-    dependencies.py    auth guard, shared clients
-  core/                config.py, security.py (JWT, Argon2, AES-GCM), exceptions.py
-  domain/              models.py (ORM entities), enums.py, schemas.py (request/response)
-  services/            auth, metadata, classification, sample_sanitizer, classification_parser
-  repositories/        user, connection, metadata: all system DB queries
-  infrastructure/
-    database/          system_database.py, target_database.py (connect, inspect schema, sample)
-    llm/               llm_client.py (OpenAI-compatible HTTP client), prompts.py
-alembic/               system DB migrations
-db/demo/               demo target database init script
-tests/                 unit/, integration/, e2e/
-```
+- **System DB**: the service's own store (users, metadata snapshots, encrypted credentials, cached results).
+- **Target DB**: the database being scanned, read-only. Compose ships one, `demo-db`, seeded with the case study script.
 
-**Two separate databases:**
+**Stack:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 (async) + Alembic, asyncpg, httpx, Argon2id, JWT, AES-256-GCM, pytest, Docker Compose, PostgreSQL 16.
 
-- The **system DB** is the application's own store.
-- A **target DB** is any external database being analyzed. Compose ships one target, `demo-db`, seeded with the case study script.
+## Running the project
 
-**System DB relationships:** `db_connections` 1─N `db_metadata` (snapshots) 1─N `db_tables` 1─N `db_columns`. There is also a `users` table.
-
-## Technology Stack
-
-| Component | Technology |
-|---|---|
-| Language / framework | Python 3.12, FastAPI, Pydantic v2, pydantic-settings |
-| System DB access | SQLAlchemy 2 (async) + asyncpg, Alembic migrations |
-| Target DB access | asyncpg (read-only sessions, statement timeout) |
-| LLM | Any OpenAI-compatible `/chat/completions` API via an `httpx`-based `LLMClient` |
-| Security | Argon2id password hashing, JWT (HS256), AES-256-GCM credential encryption |
-| Tests | pytest, pytest-asyncio, httpx `MockTransport` / `ASGITransport` |
-| Runtime | Docker, Docker Compose, PostgreSQL 16 |
-
-## Prerequisites
+### Requirements
 
 - Docker with Docker Compose v2
-- `openssl` (to generate secrets)
-- An API key for an OpenAI-compatible LLM, or a local one (see [LLM provider configuration](#llm-provider-configuration))
+- An API key for an OpenAI-compatible LLM (or a local Ollama model, see below)
 
-## Environment Configuration
-
-All configuration is read from environment variables, normally via `.env`. `.env` is git-ignored. [.env.example](.env.example) lists every variable with safe placeholders and comments.
+### 1. Configure
 
 ```bash
 cp .env.example .env
-sed -i.bak "s|^JWT_SECRET_KEY=.*|JWT_SECRET_KEY=$(openssl rand -hex 32)|" .env
-sed -i.bak "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$(openssl rand -base64 32)|" .env
-rm .env.bak
-$EDITOR .env   # set LLM_API_KEY, and change every change-me-* value
 ```
 
-| Group | Variables |
-|---|---|
-| Application | `APP_ENV`, `APP_PORT`, `LOG_LEVEL`, `CORS_ALLOWED_ORIGINS`, `MAX_REQUEST_BODY_BYTES` |
-| System DB | `SYSTEM_DB_HOST`, `SYSTEM_DB_PORT`, `SYSTEM_DB_NAME`, `SYSTEM_DB_USER`, `SYSTEM_DB_PASSWORD` |
-| Authentication | `AUTH_USERNAME`, `AUTH_PASSWORD`, `JWT_SECRET_KEY`, `JWT_ALGORITHM`, `JWT_EXPIRE_MINUTES` |
-| Encryption | `ENCRYPTION_KEY` (base64, 32 bytes) |
-| LLM | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TIMEOUT`, `LLM_MAX_RETRIES`, `LLM_JSON_MODE` |
-| Target DB / sampling | `TARGET_DB_CONNECT_TIMEOUT_SECONDS`, `TARGET_DB_STATEMENT_TIMEOUT_MS`, `MAX_SAMPLE_COUNT`, `SAMPLE_MASKING_MODE`, `CHECKSUM_VALIDATION_ENABLED`, `CLASSIFICATION_CACHE_TTL_SECONDS` |
-| Demo DB | `DEMO_DB_NAME`, `DEMO_DB_USER`, `DEMO_DB_PASSWORD` (owner), `DEMO_DB_READONLY_USER`, `DEMO_DB_READONLY_PASSWORD` (SELECT-only login for scanning), `DEMO_DB_EXPOSED_PORT` |
+Open `.env` and set `LLM_API_KEY`. The other values work as is for local development. Before any shared deployment, generate fresh secrets and change every `change-me-*` value:
 
-## Docker Compose Startup
+```bash
+openssl rand -hex 32      # JWT_SECRET_KEY
+openssl rand -base64 32   # ENCRYPTION_KEY
+```
+
+### 2. Start
 
 ```bash
 docker compose up --build -d
-curl http://localhost:8000/health   # {"status":"ok"}
-open http://localhost:8000/         # web UI
+curl http://localhost:8000/health        # {"status":"ok"}
 ```
 
-| Service | Purpose |
+This starts three containers: `app` (port `8000`), `system-db`, and `demo-db` (host port `5433`). On every start:
+
+- the app runs `alembic upgrade head` (migrations `0001`, `0002`) and creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`;
+- `demo-db` runs the scripts in [db/demo/](db/demo/) only when its volume is empty (demo data plus the SELECT-only login `discovery_reader`).
+
+| URL | What |
 |---|---|
-| `app` | FastAPI on port `8000` |
-| `system-db` | PostgreSQL 16, the application's own database |
-| `demo-db` | PostgreSQL 16 seeded from [db/demo/](db/demo/) on first start; exposed on host port `5433` |
-| `ollama` | *(profile `local-llm`, optional)* Local OpenAI-compatible LLM; see [LLM provider configuration](#llm-provider-configuration) |
+| http://localhost:8000/ | Web UI (sign in with `AUTH_USERNAME` / `AUTH_PASSWORD`) |
+| http://localhost:8000/docs | Swagger UI (disabled when `APP_ENV=production`) |
 
-## Database Initialization and Migrations
-
-- On every start, the `app` container runs `alembic upgrade head` and then launches uvicorn.
-- At startup the app creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`, stored as an Argon2 hash. If `AUTH_PASSWORD` changes, the hash is updated on the next start.
-- `demo-db` runs the init scripts in [db/demo/](db/demo/) only when its volume is empty: the case study demo script, then `02_readonly_user.sh` (the SELECT-only login). To re-seed, run `docker compose down -v`; this also wipes the system DB. To add only the read-only login to an existing volume: `docker compose exec demo-db sh /docker-entrypoint-initdb.d/02_readonly_user.sh`.
-
-| Migration | Content |
-|---|---|
-| `0001` | Metadata, tables, columns, connections |
-| `0002` | `users` table; connections become reusable (1─N snapshots); `schema_name` and `table_count` on metadata. Existing data is migrated: duplicate connections are merged, keeping the newest password. Irreversible |
-
-## Web UI
-
-Open http://localhost:8000/ (redirects to `/ui/`) and sign in with `AUTH_USERNAME` / `AUTH_PASSWORD`. The UI is a static page served by the app itself (no build step, no external scripts), calling the same `/api/v1` endpoints:
-
-- **Scan a database:** connection form (prefilled for `demo-db`) → `POST /db/metadata`
-- **Snapshots:** list → `GET /metadata`; select one → `GET /metadata/{id}`; delete → `DELETE /metadata/{id}`
-- **Tables and columns:** filter, then **Classify** one column or **Classify all** in a table → `POST /classify`. Click a classified row to see the 12-category distribution, `pii_likelihood`, checksum evidence (final vs. LLM-only bars) and the LLM's reasoning.
-
-The token is kept in `sessionStorage` (cleared when the tab closes). The `/ui` responses carry a strict `Content-Security-Policy` (`'self'` only, no inline scripts or styles, `frame-ancestors 'none'`); all server data is rendered with `textContent`.
-
-## API Documentation
-
-Swagger UI is at http://localhost:8000/docs and the OpenAPI schema at `/openapi.json`. Both are disabled when `APP_ENV=production`.
-
-## Authentication
-
-`POST /api/v1/auth` returns a JWT. It accepts credentials in either form:
-
-- a JSON body: `{"username": "...", "password": "..."}`
-- HTTP Basic authentication
-
-Every other endpoint under `/api/v1` requires `Authorization: Bearer <token>`. HTTP Basic credentials are also accepted directly.
+### 3. Stop
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"change-me-admin"}' | jq -r .access_token)
+docker compose down        # keep data
+docker compose down -v     # also delete the databases (demo-db is re-seeded on next start)
 ```
 
-## API Endpoints
+### Optional: local LLM with Ollama
+
+No data leaves the machine. Needs about 6 GB of memory for Docker.
+
+```bash
+docker compose --profile local-llm up -d
+docker compose exec ollama ollama pull llama3.1
+# in .env: LLM_BASE_URL=http://ollama:11434/v1  LLM_API_KEY=  LLM_MODEL=llama3.1  LLM_TIMEOUT=300
+docker compose up -d app
+```
+
+### Running tests
+
+```bash
+# Unit + integration + e2e (LLM mocked, throwaway databases)
+docker compose --profile test run --build --rm tests
+docker compose rm -sf test-system-db test-target-db
+
+# Unit tests only, without Docker
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest tests/unit
+
+# Black-box contract tests against the running service (real LLM)
+docker compose --profile contract run --build --rm contract-tests
+```
+
+## API
+
+Base URL: `http://localhost:8000/api/v1`. The examples use the default credentials from `.env.example`; replace them if you changed `.env`. `jq` is optional and only used to pretty-print and extract values.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/auth` | Exchange credentials for a JWT |
-| `POST` | `/api/v1/db/metadata` | Connect to a database, extract and store its metadata |
-| `GET` | `/api/v1/metadata` | List metadata snapshots (`limit`, `offset`) |
-| `GET` | `/api/v1/metadata/{metadata_id}` | Tables, columns, column IDs and data types |
-| `DELETE` | `/api/v1/metadata/{metadata_id}` | Delete a snapshot with its tables and columns; the connection is kept |
+| `GET` | `/health` | Liveness check (no auth) |
+| `POST` | `/api/v1/auth` | Get a JWT |
+| `POST` | `/api/v1/db/metadata` | Connect to a database and store its metadata |
+| `GET` | `/api/v1/metadata` | List metadata snapshots |
+| `GET` | `/api/v1/metadata/{metadata_id}` | Tables and columns of a snapshot |
+| `DELETE` | `/api/v1/metadata/{metadata_id}` | Delete a snapshot |
 | `POST` | `/api/v1/classify` | Classify a column into the 12 PII categories |
-| `GET` | `/health` | Liveness check |
 
-**Unversioned aliases.** The case study lists the endpoints without a prefix (`/auth`, `/db/metadata`, `/metadata`, `/metadata/{id}`, `/classify`). Those paths are served too, by the same handlers. They are hidden from Swagger; `/api/v1` is the documented API.
+The same endpoints are also served without the `/api/v1` prefix (`/auth`, `/db/metadata`, ...), as listed in the case study. A ready-made walkthrough for VS Code / JetBrains is in [requests.http](requests.http).
 
-A ready-made walkthrough is in [requests.http](requests.http). The same flow with curl:
+Set these once in your shell; the examples below reuse them:
 
 ```bash
 API=http://localhost:8000/api/v1
-AUTH="Authorization: Bearer $TOKEN"
-
-# Extract metadata. The app runs inside compose, so the host is "demo-db", not "localhost".
-# Optional: "schema_name": "public" to extract a single schema.
-METADATA_ID=$(curl -s -X POST $API/db/metadata -H "$AUTH" -H "Content-Type: application/json" \
-  -d '{"host":"demo-db","port":5432,"database":"llm_discovery_demo","username":"discovery_reader","password":"change-me-demo-reader"}' \
-  | jq -r .metadata_id)
-
-curl -s $API/metadata -H "$AUTH" | jq
-curl -s $API/metadata/$METADATA_ID -H "$AUTH" | jq
-
-# Classify customers.email
-COLUMN_ID=$(curl -s $API/metadata/$METADATA_ID -H "$AUTH" \
-  | jq -r '.tables[] | select(.table_name=="customers") | .columns[] | select(.column_name=="email") | .column_id')
-curl -s -X POST $API/classify -H "$AUTH" -H "Content-Type: application/json" \
-  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":10}" | jq
-
-curl -s -X DELETE $API/metadata/$METADATA_ID -H "$AUTH"
 ```
 
-### `POST /api/v1/classify` response
+### `POST /auth`
+
+Returns a JWT. Credentials can be sent as a JSON body or with HTTP Basic.
+
+**JSON body**
+
+```bash
+curl -s -X POST $API/auth \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"change-me-admin"}'
+```
+
+```json
+{"access_token":"eyJhbGciOi...","token_type":"bearer","expires_in":3600}
+```
+
+**HTTP Basic**
+
+```bash
+curl -s -X POST $API/auth -u admin:change-me-admin
+```
+
+**Save the token for the next requests**
+
+```bash
+TOKEN=$(curl -s -X POST $API/auth -u admin:change-me-admin | jq -r .access_token)
+```
+
+**Wrong password → `401`**
+
+```bash
+curl -s -X POST $API/auth -u admin:wrong-password
+# {"detail":"Invalid credentials"}
+```
+
+**No credentials → `401`**
+
+```bash
+curl -s -X POST $API/auth
+# {"detail":"Provide credentials as a JSON body or with HTTP Basic authentication"}
+```
+
+Every other `/api/v1` endpoint needs `Authorization: Bearer $TOKEN`. HTTP Basic (`-u admin:change-me-admin`) is accepted there as well.
+
+### `POST /db/metadata`
+
+Connects to a PostgreSQL database, extracts its tables, views and columns, and stores them as a new snapshot. Returns `201` with the snapshot. Each call creates a new snapshot with new column IDs.
+
+The app runs inside Docker Compose, so the demo database host is `demo-db` (port `5432`), not `localhost`.
+
+**All schemas of the demo database**
+
+```bash
+curl -s -X POST $API/db/metadata \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "host": "demo-db",
+    "port": 5432,
+    "database": "llm_discovery_demo",
+    "username": "discovery_reader",
+    "password": "change-me-demo-reader"
+  }' | jq
+```
 
 ```json
 {
-  "column_id": "8f0c…",
-  "metadata_id": "1a2b…",
+  "metadata_id": "1a2b...",
+  "connection_id": "9c8d...",
+  "database_name": "llm_discovery_demo",
+  "schema_name": null,
+  "host": "demo-db",
+  "port": 5432,
+  "created_at": "2026-11-07T10:00:00Z",
+  "table_count": 9,
+  "tables": [
+    {
+      "table_id": "...",
+      "schema_name": "public",
+      "table_name": "customers",
+      "table_type": "TABLE",
+      "columns": [
+        {"column_id": "8f0c...", "column_name": "email", "data_type": "character varying(100)", "is_nullable": false, "ordinal_position": 5}
+      ]
+    }
+  ]
+}
+```
+
+**Save the snapshot ID**
+
+```bash
+METADATA_ID=$(curl -s -X POST $API/db/metadata \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"host":"demo-db","port":5432,"database":"llm_discovery_demo","username":"discovery_reader","password":"change-me-demo-reader"}' \
+  | jq -r .metadata_id)
+```
+
+**Only one schema** (`schema_name`)
+
+```bash
+curl -s -X POST $API/db/metadata \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"host":"demo-db","port":5432,"database":"llm_discovery_demo","username":"discovery_reader","password":"change-me-demo-reader","schema_name":"public"}' \
+  | jq '{metadata_id, schema_name, table_count}'
+```
+
+**Unknown schema → `422`**
+
+```bash
+curl -s -X POST $API/db/metadata \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"host":"demo-db","port":5432,"database":"llm_discovery_demo","username":"discovery_reader","password":"change-me-demo-reader","schema_name":"no_such_schema"}'
+# {"detail":"Schema 'no_such_schema' does not exist or has no tables"}
+```
+
+**Wrong password or unreachable host → `400`**
+
+```bash
+curl -s -X POST $API/db/metadata \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"host":"demo-db","port":5432,"database":"llm_discovery_demo","username":"discovery_reader","password":"wrong"}'
+# {"detail":"Could not connect to the target database. Check the connection details and that the database is reachable."}
+```
+
+**Missing field → `422`**
+
+```bash
+curl -s -X POST $API/db/metadata \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"host":"demo-db","database":"llm_discovery_demo"}'
+```
+
+**No token → `401`**
+
+```bash
+curl -s -X POST $API/db/metadata \
+  -H "Content-Type: application/json" \
+  -d '{"host":"demo-db","port":5432,"database":"llm_discovery_demo","username":"discovery_reader","password":"change-me-demo-reader"}'
+# {"detail":"Not authenticated"}
+```
+
+### `GET /metadata`
+
+Lists snapshots, newest first. Query parameters: `limit` (1–500, default 50) and `offset` (default 0).
+
+**Default page**
+
+```bash
+curl -s $API/metadata -H "Authorization: Bearer $TOKEN" | jq
+```
+
+```json
+{
+  "total": 2,
+  "items": [
+    {"metadata_id": "1a2b...", "connection_id": "9c8d...", "database_name": "llm_discovery_demo", "schema_name": null, "host": "demo-db", "port": 5432, "created_at": "2026-11-07T10:00:00Z", "table_count": 9}
+  ]
+}
+```
+
+**Pagination**
+
+```bash
+curl -s "$API/metadata?limit=5&offset=5" -H "Authorization: Bearer $TOKEN" | jq
+```
+
+**With HTTP Basic instead of a token**
+
+```bash
+curl -s $API/metadata -u admin:change-me-admin | jq '.total'
+```
+
+**Invalid `limit` → `422`**
+
+```bash
+curl -s "$API/metadata?limit=0" -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /metadata/{metadata_id}`
+
+Returns a snapshot with all tables and columns, including the `column_id` needed for classification.
+
+**Full detail**
+
+```bash
+curl -s $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN" | jq
+```
+
+**Table names only**
+
+```bash
+curl -s $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.tables[] | "\(.schema_name).\(.table_name) (\(.table_type))"'
+```
+
+**Find a column ID (`customers.email`)**
+
+```bash
+COLUMN_ID=$(curl -s $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.tables[] | select(.table_name=="customers") | .columns[] | select(.column_name=="email") | .column_id')
+echo $COLUMN_ID
+```
+
+**Unknown ID → `404`**
+
+```bash
+curl -s $API/metadata/00000000-0000-0000-0000-000000000000 -H "Authorization: Bearer $TOKEN"
+```
+
+**Not a UUID → `422`**
+
+```bash
+curl -s $API/metadata/abc -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /classify`
+
+Samples up to `sample_count` distinct values of a column, masks them, and asks the LLM for a probability distribution over the 12 categories. Deterministic checks (TCKN checksum, Luhn, email and IP format) on the raw samples are fused into the result.
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `column_id` | yes | | From `GET /metadata/{id}` |
+| `sample_count` | no | `10` | `1` to `MAX_SAMPLE_COUNT` (default 100) |
+| `force_refresh` | no | `false` | Skip the cache and call the LLM again |
+
+**Classify a column**
+
+```bash
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":10}" | jq
+```
+
+```json
+{
+  "column_id": "8f0c...",
+  "metadata_id": "1a2b...",
   "schema_name": "public",
   "table_name": "customers",
   "column_name": "email",
@@ -189,244 +368,236 @@ curl -s -X DELETE $API/metadata/$METADATA_ID -H "$AUTH"
   "sample_count_used": 5,
   "masking_mode": "partial",
   "classification": {
-    "email_address": 0.95, "phone_number": 0.0, "ssn": 0.0, "credit_card_number": 0.0,
-    "national_id_number": 0.0, "full_name": 0.05, "first_name": 0.0, "last_name": 0.0,
+    "email_address": 0.98, "phone_number": 0.0, "ssn": 0.0, "credit_card_number": 0.0,
+    "national_id_number": 0.0, "full_name": 0.02, "first_name": 0.0, "last_name": 0.0,
     "tckn": 0.0, "home_address": 0.0, "date_of_birth": 0.0, "ip_address": 0.0
   },
   "predicted_category": "email_address",
-  "pii_likelihood": 0.97,
-  "llm_classification": { "email_address": 0.95, "full_name": 0.05, "…": 0.0 },
+  "pii_likelihood": 0.99,
+  "llm_classification": {"email_address": 0.95, "full_name": 0.05, "...": 0.0},
   "llm_pii_likelihood": 0.97,
   "checksum_evidence": [
-    { "category": "email_address", "check": "email_format", "matched": 5, "checked": 5, "weight": 0.6 }
+    {"category": "email_address", "check": "email_format", "matched": 5, "checked": 5, "weight": 0.6}
   ],
   "reasoning": "All samples are email addresses.",
   "model": "gpt-4o-mini",
-  "classified_at": "2026-11-05T15:13:05Z",
+  "classified_at": "2026-11-07T10:01:00Z",
   "cached": false
 }
 ```
 
-- `classification` always contains all 12 categories. It is validated and normalized to sum to 1 (tolerance `1e-3`). It answers "which category does this column most resemble?"
-- `pii_likelihood` answers "is this column PII at all?" Without it, a column such as `unit_price` would have to be reported as some PII class. See [Design decisions](#design-decisions--assumptions).
-- `classification` / `pii_likelihood` are the final values: the LLM's answer fused with the checksum evidence. `llm_classification` / `llm_pii_likelihood` are the LLM's answer before fusion; `checksum_evidence` lists the checks that applied (see [Checksum validation](#checksum-validation-tckn-luhn-email-ip)).
-- `cached` is `true` when the result was reused; `classified_at` is when the LLM produced it. Send `"force_refresh": true` in the request to skip the cache.
-- Sample values are never returned.
+- `classification` always has all 12 categories and sums to 1. `predicted_category` is the highest one, or `null` when nothing fits.
+- `pii_likelihood` says whether the column is PII at all (e.g. `products.unit_price` scores near 0).
+- `llm_*` fields are the LLM answer before the deterministic checks were applied.
+- Scores are model confidence, not calibrated probabilities. Sample values are never returned.
+
+**Short summary only**
+
+```bash
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"column_id\":\"$COLUMN_ID\"}" \
+  | jq '{column_name, predicted_category, pii_likelihood, cached}'
+```
+
+**Same request again → served from cache** (`"cached": true`, ~30 ms instead of ~3 s)
+
+```bash
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":10}" | jq '.cached'
+```
+
+**Force a fresh LLM call**
+
+```bash
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":10,\"force_refresh\":true}" | jq '{cached, classified_at}'
+```
+
+**TCKN column (checksum evidence)**: `customers.national_id`
+
+```bash
+COL=$(curl -s $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.tables[] | select(.table_name=="customers") | .columns[] | select(.column_name=="national_id") | .column_id')
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"column_id\":\"$COL\",\"sample_count\":20}" \
+  | jq '{predicted_category, pii_likelihood, checksum_evidence}'
+```
+
+**Non-PII column**: `products.unit_price`
+
+```bash
+COL=$(curl -s $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.tables[] | select(.table_name=="products") | .columns[] | select(.column_name=="unit_price") | .column_id')
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"column_id\":\"$COL\"}" \
+  | jq '{predicted_category, pii_likelihood, reasoning}'
+```
+
+**Every column of a table** (`customers`)
+
+```bash
+for COL in $(curl -s $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN" \
+    | jq -r '.tables[] | select(.table_name=="customers") | .columns[].column_id'); do
+  curl -s -X POST $API/classify \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"column_id\":\"$COL\"}" \
+    | jq -c '{column_name, predicted_category, pii_likelihood}'
+done
+```
+
+**`sample_count` too large → `422`**
+
+```bash
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":1000}"
+# {"detail":"sample_count must be at most 100"}
+```
+
+**`sample_count` below 1 → `422`**
+
+```bash
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":0}"
+```
+
+**Unknown column → `404`**
+
+```bash
+curl -s -X POST $API/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"column_id":"00000000-0000-0000-0000-000000000000"}'
+```
+
+### `DELETE /metadata/{metadata_id}`
+
+Deletes a snapshot with its tables, columns and cached classification results. The stored connection is deleted together with its last snapshot.
+
+**Delete a snapshot**
+
+```bash
+curl -s -X DELETE $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN"
+# {"metadata_id":"1a2b...","deleted":true}
+```
+
+**Check it is gone → `404`**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN"
+# 404
+```
+
+**Delete again → `404`**
+
+```bash
+curl -s -X DELETE $API/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN"
+```
+
+**Delete every snapshot**
+
+```bash
+for ID in $(curl -s "$API/metadata?limit=500" -H "Authorization: Bearer $TOKEN" | jq -r '.items[].metadata_id'); do
+  curl -s -X DELETE $API/metadata/$ID -H "Authorization: Bearer $TOKEN"; echo
+done
+```
 
 ### Error responses
 
+All errors return `{"detail": ...}`.
+
 | Status | When |
 |---|---|
-| `400` | `POST /db/metadata` cannot connect with the supplied details (generic message) |
-| `401` | Missing or invalid credentials/token |
+| `400` | `POST /db/metadata` cannot connect with the given details |
+| `401` | Missing or invalid credentials / token |
 | `404` | Unknown metadata or column ID |
-| `409` | The column/table no longer exists in the target DB (metadata is stale) |
+| `409` | The column or table no longer exists in the target DB (snapshot is stale) |
 | `413` | Request body larger than `MAX_REQUEST_BODY_BYTES` |
-| `422` | Validation error, e.g. `sample_count` out of range or an unknown `schema_name` |
-| `502` | Stored target DB unreachable, or the LLM failed / returned unusable output |
+| `422` | Validation error (missing field, bad UUID, `sample_count` out of range, unknown `schema_name`) |
+| `502` | Target DB unreachable, or the LLM failed / returned unusable output |
+
+## Configuration
+
+All settings come from `.env`; [.env.example](.env.example) lists and explains every variable. The most useful ones:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | OpenAI, empty, `gpt-4o-mini` | Any OpenAI-compatible `/chat/completions` API |
+| `AUTH_USERNAME`, `AUTH_PASSWORD` | `admin`, `change-me-admin` | Login for the API and UI |
+| `SAMPLE_MASKING_MODE` | `partial` | `none`, `partial` (mask email local part and middle digits) or `strict` (shape only) |
+| `MAX_SAMPLE_COUNT` | `100` | Upper limit for `sample_count` |
+| `CHECKSUM_VALIDATION_ENABLED` | `true` | Fuse TCKN / Luhn / email / IP checks into the result |
+| `CLASSIFICATION_CACHE_TTL_SECONDS` | `86400` | Cache lifetime; `0` disables the cache |
+
+**LLM providers:** any OpenAI-compatible API works: OpenAI (`https://api.openai.com/v1`), Ollama (`http://ollama:11434/v1`, or `http://host.docker.internal:11434/v1` when installed on the host), vLLM, LM Studio, Azure OpenAI. Leave `LLM_API_KEY` empty if the provider needs no key; set `LLM_JSON_MODE=false` if it rejects `response_format`.
+
+## Project layout
+
+```
+app/
+  api/routes/          HTTP endpoints only
+  services/            business logic (metadata, classification, masking, checksums, cache)
+  repositories/        system DB queries
+  infrastructure/      target DB access, LLM client and prompts
+  core/                config, security (JWT, Argon2, AES-GCM)
+  domain/              ORM models and request/response schemas
+alembic/               system DB migrations
+db/demo/               demo database init scripts
+tests/                 unit, integration, e2e, contract
+```
 
 ## How Classification Works
 
-1. The column, its table, the snapshot and the stored connection are looked up from `column_id`.
-2. The password is decrypted and a **read-only** connection with a statement timeout is opened.
-3. Up to `sample_count` **distinct, non-null** values are fetched, cast to text and truncated to 200 characters, ordered by `md5(value)`: a pseudo-random spread that stays the same while the data is unchanged (needed for the cache, and reproducible). `inet` values are taken via `host()`, so there is no netmask. Identifiers are validated and quoted; the limit is a bind parameter.
-4. **Cache lookup** (see [Classification cache](#classification-cache)). On a hit the stored result is returned with `cached: true` and steps 5–8 are skipped.
-5. Samples are masked according to `SAMPLE_MASKING_MODE` (see below).
-6. The LLM gets the category definitions, the column metadata and the JSON-encoded samples between explicit delimiters. It must reply with JSON: `{"pii_likelihood", "classification", "reasoning"}`. Requests use `temperature=0` and JSON mode.
-7. The reply is validated:
-   - Every value must be a probability in `[0, 1]`.
-   - Unknown categories are dropped and missing ones set to 0.
-   - The distribution is rescaled to sum to 1.
-   - An invalid reply is re-requested up to twice. Timeouts, 429 and 5xx responses are retried with exponential backoff.
-8. Deterministic checks run on the **raw** samples and are fused into the result (see below). The result is stored in the cache.
-
-The scores are model confidence, **not calibrated statistical probabilities**; the deterministic checks and the cache make them more stable, not calibrated.
-
-### Checksum validation (TCKN, Luhn, email, IP)
-
-The LLM only sees masked samples and is not deterministic: on repeated runs `gpt-4o-mini` scored the demo `customers.national_id` column as `tckn`/`national_id_number` 0.5/0.5, 0.1/0.9 or 0/1. Deterministic checks on the unmasked values (inside the app; only match counts are kept) back the LLM up for the categories that have a syntactic definition. Names, addresses, phone numbers and dates of birth depend on context (a date is not necessarily a birth date), so they are left to the LLM.
-
-| Check | Passes when | Weight |
-|---|---|---|
-| `tckn_checksum` | 11 digits, no leading 0, digit 10 = `(7·(d1+d3+d5+d7+d9) − (d2+d4+d6+d8)) mod 10`, digit 11 = `(d1+…+d10) mod 10` | 0.6 |
-| `tckn_format` | 11 digits, no leading 0 (used when the checksum fails; the case study's own TCKN examples such as `12345678901` fail it) | 0.3 |
-| `luhn` | 13–19 digits (spaces/hyphens allowed) passing the Luhn check | 0.6 |
-| `email_format` | The whole value is an email address (`local@domain.tld`) | 0.6 |
-| `ip_address` | The whole value parses as an IPv4 or IPv6 address | 0.6 |
-
-A check counts as evidence when at least 80% of the non-empty samples pass it. Fusion, per evidence item:
-
-1. For TCKN, the probability on the generic `national_id_number` moves to the specific `tckn` (an 11-digit Turkish-shaped "national ID" is a TCKN).
-2. `final = (1 − weight) · llm + weight · one_hot(category)`; `pii_likelihood` is pulled toward 1 the same way.
-
-An LLM answer for an unrelated category survives: the 11-digit `employees.social_security_number` column stays `ssn` 0.7 / `tckn` 0.3. Disable with `CHECKSUM_VALIDATION_ENABLED=false`.
-
-### Classification cache
-
-Calling the LLM again for an unchanged column costs money and 2–3 s, and can give a different answer. A result is stored in `classification_results` and reused when **all** of these are unchanged:
-
-| Part of the cache key | Why |
-|---|---|
-| `column_id`, `sample_count` | Same column (snapshot), same request |
-| Fingerprint of the sample values | Data unchanged. HMAC-SHA256 keyed with `ENCRYPTION_KEY`, so it cannot be brute-forced back to short values such as TCKNs; raw values are never stored |
-| `LLM_BASE_URL`, `LLM_MODEL`, system prompt hash, logic version | Same model and prompt |
-| `SAMPLE_MASKING_MODE`, `CHECKSUM_VALIDATION_ENABLED` | Same settings |
-
-- The target database is still queried on every request: the fresh samples are how the cache knows the data is unchanged. A cache hit takes ~30 ms instead of ~3 s.
-- `"force_refresh": true` skips the lookup and replaces the stored result (the UI's **Re-run** button does this).
-- Results expire after `CLASSIFICATION_CACHE_TTL_SECONDS` (default 86400); `0` disables the cache.
-- Deleting a snapshot deletes its cached results (`ON DELETE CASCADE`).
-
-### Sample masking
-
-| `SAMPLE_MASKING_MODE` | Effect | Example |
-|---|---|---|
-| `none` | Values are sent as is | `ahmet.yilmaz@email.com` |
-| `partial` (default) | The email local part and the middle digits of values with ≥ 6 digits are replaced with `*`. Length, separators and domains are kept; names and addresses are not changed | `a***********@email.com`, `12*******01`, `+90 *** *** **67` |
-| `strict` | Letters → `x`/`X`, digits → `9`; only the shape remains | `xxxxx.xxxxxx@xxxxx.xxx` |
-
-Masking trades accuracy for privacy. `partial` keeps formats recognizable but leaves names readable. Names cannot be classified once they are unreadable. For real personal data, prefer a self-hosted model.
-
-## Running Tests
-
-Tests are split into four levels:
-
-| Level | Scope | Needs |
-|---|---|---|
-| `tests/unit` | Security, masking, parser, checksum checks + fusion, cache key, prompts, LLM client (mocked HTTP), SQL building, HTTP guards/validation, UI serving | Nothing |
-| `tests/integration` | Auth service, metadata extraction/persistence/deletion, classification flow against real PostgreSQL | Test DBs |
-| `tests/e2e` | Full API flow: auth → extract → list → detail → classify → delete | Test DBs |
-| `tests/contract` | Black-box API contract over HTTP only (no imports from `app`): auth, extraction, list/detail, validation, checksum rules, cache, delete. Meant to be run unchanged against the Java port | A running deployment + real LLM |
-
-In unit, integration and e2e tests the LLM is mocked, so they never call a live provider. These three levels run with one command, using dedicated throwaway databases (tmpfs) seeded with the demo script:
-
-```bash
-docker compose --profile test run --build --rm tests
-docker compose rm -sf test-system-db test-target-db   # clean up the test databases
-```
-
-Unit tests only, without Docker:
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-pytest tests/unit
-```
-
-Integration and e2e tests are skipped unless `RUN_INTEGRATION=1` is set. They also need `SYSTEM_DB_*` and `TEST_TARGET_DB_*` variables pointing at disposable databases, as set in the compose `tests` service.
-
-### Contract tests (same tests for Python and Java)
-
-The contract suite runs against a live deployment and the demo database, with the real LLM. It only asserts rules that hold for any LLM answer (structure, status codes, checksum effects, cache, delete semantics), so it can verify any implementation of the API:
-
-```bash
-docker compose up -d
-docker compose --profile contract run --build --rm contract-tests                                  # Python service
-docker compose --profile contract run --build --rm -e CONTRACT_BASE_URL=http://<java-service>:<port> contract-tests   # Java port
-```
-
-Without `CONTRACT_BASE_URL` the suite is skipped, so the default test run is unaffected. It creates its own snapshots and deletes them; it makes about 10 LLM calls.
-
-## LLM Provider Configuration
-
-Any server implementing the OpenAI `/chat/completions` API works:
-
-| Provider | `LLM_BASE_URL` | `LLM_MODEL` example |
-|---|---|---|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| Ollama via compose (`local-llm` profile) | `http://ollama:11434/v1` | `llama3.1` |
-| Ollama installed on the Docker host | `http://host.docker.internal:11434/v1` | `llama3.1` |
-| vLLM / LM Studio / Azure OpenAI (compatible endpoint) | the server's `/v1` URL | the deployed model name |
-
-`LLM_API_KEY` can be left empty for providers that need no key; no `Authorization` header is sent then.
-
-### Fully local LLM with Ollama (no data leaves the machine)
-
-```bash
-docker compose --profile local-llm up -d
-docker compose exec ollama ollama pull llama3.1      # ~4.9 GB, once
-# .env: LLM_BASE_URL=http://ollama:11434/v1, LLM_API_KEY=, LLM_MODEL=llama3.1, LLM_TIMEOUT=300
-docker compose up -d app                             # reload .env
-```
-
-The model needs about 6 GB of memory available to Docker. Without a GPU, inference runs on the CPU and a classification takes from tens of seconds to a few minutes, so raise `LLM_TIMEOUT`.
-
-### Evaluating classification quality
-
-[scripts/evaluate_classification.py](scripts/evaluate_classification.py) extracts the demo DB, classifies 29 representative columns through the API and compares each result with the expected category:
-
-```bash
-docker compose exec -T app python - < scripts/evaluate_classification.py
-```
-
-The script only uses the HTTP API, so the same run can be repeated against another implementation of the API (e.g. the Java port) for comparison. Results are recorded in `TASK.md`.
-
-If the server rejects `response_format`, set `LLM_JSON_MODE=false`. The parser tolerates JSON wrapped in prose or code fences. `LLM_TIMEOUT` (seconds) and `LLM_MAX_RETRIES` control resilience.
+1. Look up the column and its stored connection; open a read-only session with a statement timeout.
+2. Fetch up to `sample_count` distinct non-null values (deterministic order, truncated to 200 characters).
+3. If the samples, model, prompt and settings are unchanged, return the cached result (`cached: true`).
+4. Mask the samples (`SAMPLE_MASKING_MODE`) and send them to the LLM with the category definitions; the reply must be JSON.
+5. Validate the reply (12 categories, values in `[0, 1]`, normalized to sum 1); retry invalid replies, timeouts, 429 and 5xx.
+6. Run deterministic checks on the raw samples and fuse them in when at least 80% match: `tckn_checksum` (weight 0.6), `tckn_format` (0.3), `luhn`, `email_format`, `ip_address` (0.6 each). Store the result in the cache.
 
 ## Security Considerations
 
-| Control | Implementation |
-|---|---|
-| Authentication | All `/api/v1` endpoints except `/auth` require a JWT or Basic credentials |
-| Password hashing | Argon2id. Unknown usernames are checked against a dummy hash, so timing doesn't reveal which accounts exist |
-| Credentials at rest | Target DB passwords are encrypted with AES-256-GCM (random nonce). The key comes only from `ENCRYPTION_KEY` and is never stored in the DB. Passwords are never returned |
-| Secrets | Only via environment / `.env` (git-ignored) |
-| Read-only target access | Two layers. (1) Every target session uses `default_transaction_read_only=on` and a `statement_timeout`, even with an owner login. (2) `demo-db` has a SELECT-only login (`DEMO_DB_READONLY_USER`, created by [db/demo/02_readonly_user.sh](db/demo/02_readonly_user.sh)): no INSERT/UPDATE/DELETE/CREATE privileges even if the session setting is turned off. Integration tests check both. For real databases, create an equivalent role and scan with it |
-| SQL injection | Only the sample limit is a value, and it is bound. Identifiers come from the stored catalog and are validated (non-empty, no NUL, ≤ 63 bytes) and quoted. LLM output is never executed |
-| LLM input | Samples are masked, truncated, JSON-encoded and delimited. The prompt marks them as untrusted data |
-| LLM output | Strictly validated, so a manipulated reply can at most skew a distribution |
-| Limits | `sample_count` ≤ `MAX_SAMPLE_COUNT`; request bodies ≤ `MAX_REQUEST_BODY_BYTES`; connect/statement/LLM timeouts |
-| Logging | No credentials or sample values are logged. Target DB failures are logged with host/db and SQLSTATE only, and API errors are generic |
-| CORS | Disabled unless `CORS_ALLOWED_ORIGINS` lists origins |
+- All `/api/v1` endpoints except `/auth` need a JWT or Basic credentials. Passwords are hashed with Argon2id.
+- Target DB passwords are encrypted with AES-256-GCM and never returned. Changing `ENCRYPTION_KEY` makes stored connections unreadable.
+- Target access has two layers: read-only sessions with a statement timeout, and a SELECT-only login (`discovery_reader` in the demo).
+- Identifiers are validated and quoted; the only SQL value (sample limit) is bound. LLM output is validated, never executed.
+- No credentials or sample values are logged; API errors are generic. CORS is off unless `CORS_ALLOWED_ORIGINS` is set.
+- The app refuses to start with weak secrets, or with `.env.example` values when `APP_ENV=production`.
+- Masked samples still leave the system. For real personal data use a self-hosted model (Ollama profile) or a provider with suitable KVKK/GDPR terms.
+- Run behind TLS in production. `POST /db/metadata` connects to caller-supplied hosts, so restrict egress.
 
-Notes:
+## Design Decisions
 
-- **PII sent to the LLM.** Even when masked, samples leave the system. Use a self-hosted model or a provider with suitable data-processing terms (KVKK/GDPR), e.g. a zero-retention configuration.
-- **HTTPS.** Basic credentials and Bearer tokens travel in headers; without TLS they can be read on the network. In production put the service behind a reverse proxy that terminates TLS.
-- **Key rotation.** `ENCRYPTION_KEY` encrypts the stored target DB passwords. To rotate it: delete the snapshots (their connections are deleted with the last snapshot), set the new key, restart, and extract the metadata again. `JWT_SECRET_KEY` can be changed any time; it only invalidates issued tokens.
-- **Startup validation.** The app refuses to start with an empty or short `JWT_SECRET_KEY`, an `ENCRYPTION_KEY` that is not base64 of 32 bytes, or, with `APP_ENV=production`, any `.env.example` value. The `.env.example` keys are development-only so that `cp .env.example .env && docker compose up` works out of the box.
-- **SSRF.** `POST /db/metadata` makes the server connect to a caller-supplied host/port. It requires authentication. Production deployments should also restrict egress or allow-list targets.
-- Generate fresh `JWT_SECRET_KEY` / `ENCRYPTION_KEY` values and change every `change-me-*` value. Changing `ENCRYPTION_KEY` makes stored connections unreadable.
+- **Re-extraction** creates a new snapshot with new column IDs; the connection row is reused. Snapshots are immutable history.
+- **Non-PII columns**: `classification` always sums to 1, so a separate `pii_likelihood` says whether the column is PII at all. When nothing fits: `predicted_category: null`, `pii_likelihood: 0`.
+- **Mixed columns** spread probability across categories; deterministic checks only fire when ≥ 80% of samples match.
+- **Scores** are model confidence, not calibrated probabilities, stabilized by deterministic checks and the cache.
+- **Deleting a snapshot** removes its tables, columns and cached results; the connection goes with its last snapshot.
+- **Views** are included (`table_type: VIEW`), so the demo DB has 9 relations (8 tables + 1 view).
+- **Auth** accepts both a JSON body and HTTP Basic; the JWT avoids repeated Argon2 checks.
 
-## Design Decisions & Assumptions
-
-The case study leaves several choices to the developer. They are answered here.
-
-| Question | Decision | Why |
-|---|---|---|
-| Re-extracting metadata: update the old record or create a new snapshot? | **New snapshot** every time. The connection row is reused (same host/port/database/username) and its encrypted password refreshed | Snapshots are immutable history: classification results and column IDs of an older snapshot stay valid. Deleting a snapshot never deletes the connection |
-| Is the column UUID regenerated on every extraction? | **Yes**, every snapshot gets new column IDs | A column ID identifies a column *in a snapshot*; reusing IDs would mix results across schema versions. Cached results are tied to the column ID and deleted with the snapshot |
-| How are non-PII columns represented? | The 12-category `classification` always sums to 1 (as the spec requires) and answers "which category does it most resemble". A separate `pii_likelihood` answers "is it PII at all". When nothing fits: uniform distribution, `predicted_category: null`, `pii_likelihood: 0`; the UI shows "Not PII" below 0.5 | Without the extra field, a column like `unit_price` would have to be reported as some PII class |
-| Can a column contain more than one PII category? | The **distribution** expresses mixtures (e.g. a notes column with emails and phone numbers spreads its mass); `predicted_category` is the single most likely one. Deterministic checks only fire when ≥ 80% of the samples match one category, so they never force a single label on mixed columns | The spec asks for one probability distribution per column; multi-label output would change the contract |
-| How are samples anonymized before they reach the LLM provider? | `SAMPLE_MASKING_MODE`: `partial` (default) masks email local parts and middle digits of numbers with ≥ 6 digits, keeping the format; `strict` keeps only the shape; `none` sends values as is. Deterministic checks run on the raw values inside the app; only counts leave it | Classification needs the format, not the identity. For real personal data a self-hosted model (Ollama profile) avoids sending anything out |
-| Are the scores probabilities? | They are **model confidence scores, not calibrated probabilities**, stabilized by deterministic checks and the cache | No labeled data to calibrate against; the API docs and UI say so |
-| How is repeated classification of the same column handled? | Cached on column, samples, model, prompt and settings; reused for `CLASSIFICATION_CACHE_TTL_SECONDS` (see [Classification cache](#classification-cache)) | Cost, latency, and a stable answer for unchanged data |
-| Why two databases? | The **target** DB is scanned read-only and belongs to someone else; the **system** DB holds this service's own state (users, snapshots, encrypted credentials, cached results) | The scanner never writes to the scanned database |
-| Why JWT after Basic auth? | `/auth` takes Basic (or JSON) credentials once and returns a short-lived signed token; Basic is still accepted on every endpoint | Fewer password checks (Argon2 is deliberately slow), expiry via `JWT_EXPIRE_MINUTES` |
-| Why does `table_count` say 9 for the demo DB? | Views are discovered as relations with `table_type: VIEW` (8 tables + the `customer_order_summary` view); system schemas (`pg_catalog`, `information_schema`, `pg_toast`) are excluded | A view can expose PII too |
-| What happens to the stored connection? | It is shared by all snapshots of the same host/port/database/user and deleted together with its **last** snapshot (FK `ON DELETE RESTRICT` protects a concurrently created snapshot) | Credentials are not kept longer than needed |
-| Does deleting a snapshot delete its tables and columns? | **Yes**: `db_tables`, `db_columns` and the cached `classification_results` go with it (`ON DELETE CASCADE`); the connection stays | Nothing else refers to them, so orphans would only waste space |
-| Are classification results stored? | **Yes**, in `classification_results`, as the cache (TTL `CLASSIFICATION_CACHE_TTL_SECONDS`); the latest result per key is kept, not a history | Avoids repeated LLM calls; a history table can be added if auditing needs it |
-| Which DB user scans the target? | A SELECT-only login; the demo ships `discovery_reader` | Least privilege; the app's read-only session is the second layer |
-| How are the Python and Java implementations kept equivalent? | One black-box contract suite (`tests/contract`) and the evaluation script, both HTTP only, run against both | Same request → same contract and business rules |
-
-Other decisions:
-
-- **Auth accepts a JSON body and HTTP Basic.** The spec defines a JSON body; the case study asks for Basic authentication. Both are supported.
-- **Metadata scope.** Tables, partitioned tables, views, materialized views and foreign tables in all non-system schemas, or one schema via `schema_name`. Partitions are folded into their parent. Types come from `format_type()`, e.g. `character varying(50)`, `numeric(10,2)`.
-- **Masked card numbers** (`****-****-****-1234`) are described to the LLM as credit card data. The goal is finding columns that hold card data.
-- **Credential format.** AES-GCM is stored as `base64(nonce || ciphertext || tag)`, the same layout as Java's `AES/GCM/NoPadding`, so the Java port can share the system DB.
-- **Deviations from the technical spec's stack table:**
-  - `asyncpg` instead of `psycopg`; it is functionally equivalent here.
-  - `APP_SECRET_KEY` is omitted because the spec defines no use for it.
+The full decision log and evaluation results are in [../TASK.md](../TASK.md).
 
 ## Known Limitations
 
-- Sampling (`DISTINCT … ORDER BY md5(value)`) scans the whole column. For very large tables, `TABLESAMPLE` would be cheaper. The deterministic order also means a large column is always judged on the same subset of its values (until the data changes).
-- One column per classification request. A batch endpoint, or a whole-table prompt where columns give each other context, would cut cost and improve accuracy.
-- The `tckn_format` check (no checksum) also matches other 11-digit national IDs (e.g. Polish PESEL); those columns get pulled toward `tckn`. Masked card numbers (`****-****-****-1234`) cannot be Luhn-checked. Fusion weights are hand-set, not calibrated.
-- `pii_likelihood` and the distribution are LLM estimates and are not calibrated.
-- A cache hit still opens a connection to the target database (to fingerprint the samples).
-- There is one bootstrap admin user and no user-management endpoints.
-- The body size limit relies on `Content-Length`. Chunked uploads are not counted; a reverse proxy should enforce a hard limit.
+- Sampling scans the whole column (`DISTINCT … ORDER BY md5(value)`); large tables would benefit from `TABLESAMPLE`.
+- One column per request; there is no batch or whole-table classification endpoint.
+- `tckn_format` also matches other 11-digit IDs; masked card numbers cannot be Luhn-checked; fusion weights are hand-set.
+- A cache hit still queries the target DB (to fingerprint the samples).
+- One bootstrap admin user, no user management endpoints.
+- The body size limit relies on `Content-Length`; a reverse proxy should enforce a hard limit.
 - Migration `0002` is irreversible.

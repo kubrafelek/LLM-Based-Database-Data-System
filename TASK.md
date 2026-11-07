@@ -83,7 +83,7 @@ All met: FastAPI + PostgreSQL + OpenAI-compatible LLM + Docker; Basic auth with 
 | D12 | Email / IP | Added as checks (weight 0.6); context-dependent categories stay with the LLM. Scores documented as uncalibrated |
 | D13 | Cache | `classification_results` keyed on column, count, HMAC sample fingerprint, model, prompt hash, logic version, masking, checksum flag. Deterministic `md5` sampling; TTL (default 1 day); `force_refresh` |
 | D14 | Equivalence | HTTP-only contract suite (`tests/contract`), LLM-independent assertions |
-| D15 | Open questions | Answered in README "Design Decisions & Assumptions" |
+| D15 | Open questions | Answered in Python README "Design Decisions" (condensed) and this log |
 | D16 | Least privilege | SELECT-only login `discovery_reader` (`02_readonly_user.sh`) + read-only session; used by UI, examples, tests |
 | D17 | Layout | Two self-contained folders with own compose/README; fixed compose names; Java by feature module |
 | D18 | Java stack | Java 21, Spring Boot 3.5, Maven, JPA + Flyway, JDBC for targets, `RestClient`, Argon2id/JWT interchangeable with Python, `{"detail"}` errors |
@@ -176,6 +176,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - **Step 29 (Swagger):** Added missing `bearer` security scheme so `/docs` has an Authorize button; manual check pending.
 - **Step 30:** Java README rewritten as a first-run guide with a curl walkthrough.
 - **Step 31:** TASK.md condensed; §6 test counts re-measured (Python 203, Java 169, all passing).
+- **Step 32:** Python README simplified: run guide first, per-endpoint curl examples with success and error cases (verified against the running service), §13 sections kept in short form. Java README anchor updated.
 
 ---
 
