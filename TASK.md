@@ -291,6 +291,12 @@ Full record: `LLM_based_java/docs/MIGRATION_REPORT.md` (tool, prompts, steps, co
 - **Fix:** `.gitignore` excluded all of `.github/`, so the CI workflow was never pushed. Only `.github/modernize/` (IDE tool state) is ignored now.
 - Re-verified: Java 169 passed, contract 37/37, `/docs` and `/openapi.json` 200.
 
+### Swagger UI Authorize button (Step 29)
+- **Fix:** controllers referenced `@SecurityRequirement(name = "bearer")`, but no `bearer` scheme was declared, so `/docs` had no Authorize button and protected calls from Swagger UI returned 401. Added `common/OpenApiConfig.java` (`@SecurityScheme` HTTP bearer, JWT). Compiles; manual check in `/docs` pending.
+
+### Java README rewrite (Step 30)
+- `LLM_based_java/README.md` rewritten as a first-run guide: Quick start (`.env` → `LLM_API_KEY`, `docker compose up`, `/health`), a curl walkthrough (auth → scan demo-db → pick `customers.email` column ID with `jq` → classify → list/get/delete), endpoint table, Swagger UI Authorize steps, troubleshooting table, condensed tests and pointers. Architecture/stack/security details now link to the Python README and the migration report.
+
 ---
 
 ## 8. Classification Evaluation Results
