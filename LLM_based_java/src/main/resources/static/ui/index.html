@@ -5,41 +5,60 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LLM Data Discovery</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="/ui/styles.css">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span>LLM Data Discovery</span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 11v6c0 1.66 3.58 3 8 3 1.1 0 2.15-.08 3.1-.24"/><circle cx="18.5" cy="17.5" r="2.5"/><path d="m20.5 19.5 1.5 1.5"/></svg>
+      </span>
+      <span class="brand-text">
+        <span class="brand-name">LLM Data Discovery</span>
+        <span class="brand-sub">PII classification for PostgreSQL</span>
+      </span>
     </div>
     <div class="session" id="session" hidden>
-      <span id="session-user"></span>
-      <button type="button" class="btn btn-ghost" id="logout">Sign out</button>
+      <span class="user-chip"><span class="avatar" id="session-avatar" aria-hidden="true"></span><span id="session-user"></span></span>
+      <button type="button" class="btn btn-ghost btn-sm" id="logout">Sign out</button>
     </div>
   </header>
 
   <main>
     <!-- Sign in -->
-    <section class="card login" id="login-view">
-      <h1>Sign in</h1>
-      <p class="muted">Use the credentials from <code>AUTH_USERNAME</code> / <code>AUTH_PASSWORD</code> in <code>.env</code>.</p>
-      <form id="login-form" autocomplete="on">
-        <label>Username <input name="username" required autocomplete="username"></label>
-        <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
-        <button class="btn btn-primary" type="submit">Sign in</button>
-      </form>
+    <section class="login" id="login-view">
+      <div class="login-intro">
+        <span class="eyebrow">Data discovery</span>
+        <h1>Find personal data in your databases</h1>
+        <p>Scan a PostgreSQL database, then let an LLM estimate which columns hold personal data across 12 PII categories.</p>
+        <ol class="steps">
+          <li><span class="step-num">1</span><div><strong>Scan</strong><span>Read tables and columns into a snapshot.</span></div></li>
+          <li><span class="step-num">2</span><div><strong>Classify</strong><span>Masked samples go to the LLM, checksums verify the result.</span></div></li>
+          <li><span class="step-num">3</span><div><strong>Review</strong><span>See the category, PII likelihood and the model's reasoning.</span></div></li>
+        </ol>
+      </div>
+      <div class="card login-card">
+        <h2>Sign in</h2>
+        <p class="muted small">Use <code>AUTH_USERNAME</code> / <code>AUTH_PASSWORD</code> from <code>.env</code>.</p>
+        <form id="login-form" autocomplete="on">
+          <label>Username <input name="username" required autocomplete="username" placeholder="admin"></label>
+          <label>Password <input name="password" type="password" required autocomplete="current-password" placeholder="••••••••"></label>
+          <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+        </form>
+      </div>
     </section>
 
     <!-- Workspace -->
     <div class="workspace" id="app-view" hidden>
       <aside class="sidebar">
         <section class="card">
-          <h2>Scan a database</h2>
+          <div class="card-head">
+            <h2><span class="step-num step-sm">1</span>Scan a database</h2>
+          </div>
           <form id="connect-form" class="grid-form">
             <label class="span-2">Host <input name="host" required value="demo-db"></label>
             <label>Port <input name="port" type="number" min="1" max="65535" required value="5432"></label>
-            <label>Schema <input name="schema_name" placeholder="all"></label>
+            <label>Schema <input name="schema_name" placeholder="all schemas"></label>
             <label class="span-2">Database <input name="database" required value="llm_discovery_demo"></label>
             <label>Username <input name="username" required value="discovery_reader" autocomplete="off"></label>
             <label>Password <input name="password" type="password" autocomplete="off"></label>
@@ -49,24 +68,19 @@
 
         <section class="card">
           <div class="card-head">
-            <h2>Snapshots</h2>
-            <button type="button" class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
+            <h2><span class="step-num step-sm">2</span>Snapshots</h2>
+            <button type="button" class="btn btn-ghost btn-sm" id="refresh" title="Reload the list">Refresh</button>
           </div>
           <ul class="snapshot-list" id="snapshot-list"></ul>
         </section>
       </aside>
 
-      <section class="detail" id="detail">
-        <div class="empty card">
-          <h2>No snapshot selected</h2>
-          <p class="muted">Extract metadata from a database, or pick a snapshot on the left.</p>
-        </div>
-      </section>
+      <section class="detail" id="detail"></section>
     </div>
   </main>
 
   <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
-  <script src="app.js"></script>
+  <script src="/ui/app.js"></script>
 </body>
 </html>
