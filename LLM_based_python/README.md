@@ -596,6 +596,8 @@ The full decision log and evaluation results are in [../TASK.md](../TASK.md).
 
 - Sampling scans the whole column (`DISTINCT … ORDER BY md5(value)`); large tables would benefit from `TABLESAMPLE`.
 - One column per request; there is no batch or whole-table classification endpoint.
+- **Mixed-content columns** (e.g. JSON logs) get a single distribution, so the percentages show how the content is split, not the chance that the column is one type. `audit_logs.new_values` scores email 40% and first/last/full name 20% each: only 1 of its 5 values holds PII, and the names together outweigh the email even though `predicted_category` is `email_address`. The UI labels such results "Mixed content"; a per-category presence score (multi-label) would describe them better.
+- **Sensitive data outside the 12 categories** (salary, IBAN, tax number) is not flagged; it would need an extra "other sensitive" signal.
 - `tckn_format` also matches other 11-digit IDs; masked card numbers cannot be Luhn-checked; fusion weights are hand-set.
 - A cache hit still queries the target DB (to fingerprint the samples).
 - One bootstrap admin user, no user management endpoints.

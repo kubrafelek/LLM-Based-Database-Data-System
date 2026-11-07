@@ -166,7 +166,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - **Steps 14–15 (PDF compliance):** Empty `LLM_API_KEY` no longer sends a broken header; PDF root-path aliases (D8).
 - **Steps 16–19 (real LLM):** Evaluation script. All-zero replies accepted as non-PII (D1), clearer prompt, quota errors fail fast. 11/29 → 28/29.
 - **Step 20 (D10):** Checksum fusion; `gpt-4o-mini` non-deterministic on `national_id`, solved by moving `national_id_number` to `tckn`. 29/29.
-- **Step 21 (D11):** Web UI with CSP, verified in headless Chrome. 2026-11-07: Java UI visual refresh (sign-in intro, overview tiles, PII markers); Python UI unchanged.
+- **Step 21 (D11):** Web UI with CSP, verified in headless Chrome. 2026-11-07: Java UI visual refresh (sign-in intro, overview tiles, PII markers), ported to Python in Step 33.
 - **Steps 22–25:** Email/IP checks (D12), cache (D13, miss ~3 s / hit ~30 ms), contract suite (D14), README decisions (D15). Still 29/29.
 - **Step 26:** External checklist review; SELECT-only login added (D16); LLM parse errors don't log content.
 - **Step 27 (D17):** Repo split into `LLM_based_python/` and `LLM_based_java/`; re-verified.
@@ -177,6 +177,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - **Step 30:** Java README rewritten as a first-run guide with a curl walkthrough.
 - **Step 31:** TASK.md condensed; §6 test counts re-measured (Python 203, Java 169, all passing).
 - **Step 32:** Python README simplified: run guide first, per-endpoint curl examples with success and error cases (verified against the running service), §13 sections kept in short form. Java README anchor updated.
+- **Step 33:** Python UI: Java design ported, plus a plain-language verdict per result (Personal data / Likely X, possibly Y / Mixed content / Not personal data), explained score labels, sample-count note, "How to read the results" panel, host hint. Verified in headless Chrome. README Known Limitations: mixed-content columns (`audit_logs.new_values`: email 0.4, names 0.2×3, stable over 3 forced runs) and sensitive data outside the 12 categories (salary, IBAN).
 
 ---
 
