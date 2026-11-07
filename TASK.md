@@ -8,7 +8,7 @@ Legend: ✅ Done · 🟡 Partial (deviates from spec) · ⬜ Not started
 
 ## 1. Current Status
 
-**Last updated:** 2026-11-05
+**Last updated:** 2026-11-07
 **Phase:** Both tasks complete. Python: 29/29 with a real LLM. Java port: contract 37/37, evaluation 29/29 (`LLM_based_java/docs/MIGRATION_REPORT.md`).
 
 | # | Phase | Status | Notes |
@@ -108,18 +108,19 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - Contract: `docker compose --profile contract run --rm contract-tests` (real deployment + LLM).
 - Java: `docker compose --profile test run --build --rm tests mvn -B test` in `LLM_based_java/`.
 
-Counts below are from the per-file breakdown (before the Step 29 additions; current totals in §1).
+**Totals (measured 2026-11-07):** Python 203 (unit 171, integration 27, e2e 5) · contract 37 · Java 169 (unit 141, integration 28). Counts include parametrized cases.
 
-### Python unit (155)
+### Python unit (171)
 
 | File | # | Covers |
 |---|---|---|
-| `test_api.py` | 22 | Auth required, 401/422/413, OpenAPI paths, aliases, CORS, UI + CSP |
+| `test_api.py` | 23 | Auth required, 401/422/413, OpenAPI paths, aliases, CORS, UI + CSP, generic JSON 500 |
 | `test_checksum_evidence.py` | 55 | TCKN, Luhn, email, IP checks; evidence tiers; fusion cases |
 | `test_classification_cache.py` | 10 | Key stability and invalidation; keyed fingerprint |
 | `test_classification_parser.py` | 18 | Normalization, rejection, all-zero handling |
+| `test_config.py` | 14 | Startup validation: clear messages, all errors at once, example secrets OK in dev, rejected in production |
 | `test_llm_client.py` | 16 | Request shape, retries, quota fail-fast, parse re-request |
-| `test_prompts.py` | 4 | Categories, sample delimiting, masking note |
+| `test_prompts.py` | 5 | Categories, sample delimiting, masking note, prompt injection stays in the data block |
 | `test_sample_sanitizer.py` | 13 | none / partial / strict masking |
 | `test_security.py` | 10 | AES-GCM, JWT, Argon2id |
 | `test_target_database.py` | 7 | Identifier quoting, sample query, `inet`, password repr |
@@ -136,17 +137,18 @@ Counts below are from the per-file breakdown (before the Step 29 additions; curr
 
 ### Contract (37)
 
-`tests/contract/test_api_contract.py`: auth, extraction, list/detail, classify (shape, validation, TCKN/email/IP evidence, cache), delete semantics.
+`tests/contract/test_api_contract.py`: auth, extraction, list/detail, classify (shape, validation, TCKN/email/IP evidence, cache), delete semantics. Passes against both services.
 
-### Java (161)
+### Java unit (141) and integration (28)
 
 | File | # | Covers |
 |---|---|---|
 | `GoldenTest` | 102 | Python-generated outputs: masking, checks, evidence, fusion, parsing, prompts, crypto interop |
 | `LlmClientTest` | 15 | Same cases as Python |
+| `ClassificationServiceTest` | 7 | Mockito: cache miss/hit, `force_refresh`, TTL 0, limits before DB access, unknown column, evidence over a "no category" reply |
 | `SecurityTest` / `TargetDatabaseTest` | 7 / 7 | Crypto; identifiers and sampling |
 | `ClassificationCacheTest` | 3 | Key behavior |
-| `MetadataIntegrationTest` | 7 | Extraction and CRUD |
+| `MetadataIntegrationTest` | 8 | Extraction, CRUD, pagination, schema filter; last snapshot delete removes the connection |
 | `ClassificationIntegrationTest` | 13 | Classification flow and cache |
 | `TargetAccessIntegrationTest` | 2 | Read-only enforcement |
 | `ApiFlowIntegrationTest` | 5 | Full HTTP flow |
@@ -173,6 +175,7 @@ Counts below are from the per-file breakdown (before the Step 29 additions; curr
 - **Step 29 (D20):** Startup secret validation; connection deleted with last snapshot; Python ruff/mypy/97% cov, `pip-audit` clean; Java Spring Security, JaCoCo 90%; evaluation 31/31 with `REPEAT` mode; CI workflow.
 - **Step 29 (Swagger):** Added missing `bearer` security scheme so `/docs` has an Authorize button; manual check pending.
 - **Step 30:** Java README rewritten as a first-run guide with a curl walkthrough.
+- **Step 31:** TASK.md condensed; §6 test counts re-measured (Python 203, Java 169, all passing).
 
 ---
 
