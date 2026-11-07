@@ -54,38 +54,40 @@ Pick one:
 
 - **Web UI:** http://localhost:8080/
 - **Swagger UI:** http://localhost:8080/docs (see [Using Swagger UI](#using-swagger-ui))
-- **curl:** follow the walkthrough below
+- **curl:** follow the [walkthrough below](#api-walkthrough-with-curl)
 
 ---
 
 ## API walkthrough with curl
 
-The examples use `jq` to read JSON. Without `jq`, copy the values from the responses by hand.
+Each call below is a standalone example. Run them in order: the token from call 2 and the IDs from call 3 are used by the later calls. Replace the example IDs with your own values.
 
-### Step 1: Log in and get a token
+### 1. Health check (no token)
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth \
+curl http://localhost:8080/health
+```
+
+### 2. Log in and get a token (no token)
+
+```bash
+curl -X POST http://localhost:8080/api/v1/auth \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"change-me-admin"}' | jq -r .access_token)
-
-echo $TOKEN
+  -d '{"username":"admin","password":"change-me-admin"}'
 ```
 
-Response:
-
-```json
-{"access_token": "eyJhbGciOi...", "token_type": "bearer", "expires_in": 3600}
-```
-
-The token is valid for **60 minutes**. Send it on every other call as `Authorization: Bearer $TOKEN`. When it expires you get `401 Invalid or expired token`, so run this step again.
-
-### Step 2: Scan a database
-
-The service connects to the database you name, reads its tables and columns, and stores them as a **snapshot**:
+Copy `access_token` from the response and keep it in a variable for the next calls:
 
 ```bash
-SNAPSHOT=$(curl -s -X POST http://localhost:8080/api/v1/db/metadata \
+TOKEN=eyJhbGciOi...
+```
+
+The token is valid for **60 minutes**. When it expires you get `401 Invalid or expired token`, so log in again.
+
+### 3. Scan a database
+
+```bash
+curl -X POST http://localhost:8080/api/v1/db/metadata \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -94,90 +96,132 @@ SNAPSHOT=$(curl -s -X POST http://localhost:8080/api/v1/db/metadata \
         "database": "llm_discovery_demo",
         "username": "discovery_reader",
         "password": "change-me-demo-reader"
-      }')
+      }'
+```
 
-echo $SNAPSHOT | jq '{metadata_id, table_count}'
+Scan only one schema:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/db/metadata \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "host": "demo-db",
+        "port": 5432,
+        "database": "llm_discovery_demo",
+        "username": "discovery_reader",
+        "password": "change-me-demo-reader",
+        "schema_name": "public"
+      }'
 ```
 
 - `host` is resolved **from inside the `app` container**. Use `demo-db` for the demo database, and a reachable host name or IP for your own.
-- Add `"schema_name": "public"` to scan only one schema.
-
-### Step 3: Find a column ID
-
-Every column in the snapshot has a `column_id`. Take the `customers.email` column:
+- The response contains the snapshot's `metadata_id` and a `column_id` for every column. Copy the ones you need:
 
 ```bash
-COLUMN_ID=$(echo $SNAPSHOT | jq -r '.tables[]
-  | select(.table_name=="customers") | .columns[]
-  | select(.column_name=="email") | .column_id')
-
-echo $COLUMN_ID
+METADATA_ID=3f6c2a1e-8b4d-4c7a-9e21-5d0f7b9a1c34
+COLUMN_ID=a7d9e4b2-1c3f-4e8a-b5d6-9f0e2c7a4b18
 ```
 
-To see all the tables and columns:
+### 4. List snapshots
 
 ```bash
-echo $SNAPSHOT | jq '.tables[] | {table_name, columns: [.columns[].column_name]}'
+curl "http://localhost:8080/api/v1/metadata" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-### Step 4: Classify the column
+With paging (`limit` 1–500, default 50; `offset` default 0):
 
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/classify \
+curl "http://localhost:8080/api/v1/metadata?limit=10&offset=20" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 5. View one snapshot with its tables and columns
+
+```bash
+curl http://localhost:8080/api/v1/metadata/$METADATA_ID \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 6. Classify a column
+
+```bash
+curl -X POST http://localhost:8080/api/v1/classify \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":10}" | jq
+  -d "{\"column_id\":\"$COLUMN_ID\"}"
 ```
 
-The service reads up to 10 values from the column, masks them, sends them to the LLM and returns a result such as:
+With a sample size (1–100, default 10):
 
-```json
-{
-  "table_name": "customers",
-  "column_name": "email",
-  "predicted_category": "email_address",
-  "pii_likelihood": 0.98,
-  "classification": { "email_address": 0.97, "phone_number": 0.01, "...": "..." },
-  "cached": false
-}
+```bash
+curl -X POST http://localhost:8080/api/v1/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":20}"
+```
+
+Skip the stored result and ask the LLM again:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/classify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"column_id\":\"$COLUMN_ID\",\"sample_count\":10,\"force_refresh\":true}"
 ```
 
 - `classification` always has all 12 categories and they add up to 1.
 - `predicted_category` is `null` when the column does not look like personal data.
-- Repeating the request returns the stored result (`"cached": true`). Add `"force_refresh": true` to ask the LLM again.
+- Repeating the request returns the stored result (`"cached": true`).
 
-### Step 5: List, view and delete snapshots
+### 7. Delete a snapshot
+
+Its tables, columns and classification results are deleted with it.
 
 ```bash
-# All snapshots
-curl -s "http://localhost:8080/api/v1/metadata?limit=50&offset=0" -H "Authorization: Bearer $TOKEN" | jq
-
-# One snapshot with its tables and columns
-METADATA_ID=$(echo $SNAPSHOT | jq -r .metadata_id)
-curl -s http://localhost:8080/api/v1/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN" | jq
-
-# Delete a snapshot (its tables, columns and results go with it)
-curl -s -X DELETE http://localhost:8080/api/v1/metadata/$METADATA_ID -H "Authorization: Bearer $TOKEN"
-# {"metadata_id":"...","deleted":true}
+curl -X DELETE http://localhost:8080/api/v1/metadata/$METADATA_ID \
+  -H "Authorization: Bearer $TOKEN"
 ```
+
+### 8. Use Basic auth instead of a token
+
+Any protected call also accepts HTTP Basic credentials:
+
+```bash
+curl http://localhost:8080/api/v1/metadata -u admin:change-me-admin
+```
+
+### 9. Paths without the `/api/v1` prefix
+
+The paths from the case study PDF also work:
+
+```bash
+curl -X POST http://localhost:8080/auth \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"change-me-admin"}'
+
+curl http://localhost:8080/metadata -H "Authorization: Bearer $TOKEN"
+```
+
+The same works for `/db/metadata`, `/metadata/{metadata_id}` and `/classify`.
 
 ### Endpoint summary
 
 | Method | Path | Token needed |
 |---|---|---|
+| `GET` | `/health` | No |
 | `POST` | `/api/v1/auth` | No |
 | `POST` | `/api/v1/db/metadata` | Yes |
 | `GET` | `/api/v1/metadata` | Yes |
 | `GET` | `/api/v1/metadata/{metadata_id}` | Yes |
-| `DELETE` | `/api/v1/metadata/{metadata_id}` | Yes |
 | `POST` | `/api/v1/classify` | Yes |
-| `GET` | `/health` | No |
+| `DELETE` | `/api/v1/metadata/{metadata_id}` | Yes |
 
 Good to know:
 
 - JSON fields are **snake_case** (`column_id`, not `columnId`).
-- Instead of a token, you can also send HTTP Basic credentials on any call: `curl -u admin:change-me-admin ...`.
-- The paths from the case study PDF also work without the `/api/v1` prefix (`/auth`, `/db/metadata`, `/metadata`, `/classify`).
+- Add `| jq` to the end of any call to pretty-print the JSON.
 - Errors always look like `{"detail": "..."}`.
 
 ---
@@ -199,7 +243,7 @@ Swagger UI is turned off when `APP_ENV=production`.
 | Symptom | Cause / fix |
 |---|---|
 | `401 Not authenticated` | The `Authorization` header is missing. |
-| `401 Invalid or expired token` | Get a new token (Step 1). |
+| `401 Invalid or expired token` | Get a new token ([call 2](#2-log-in-and-get-a-token-no-token)). |
 | `401 Invalid credentials` on `/auth` | Check `AUTH_USERNAME` / `AUTH_PASSWORD` in `.env`, then run `docker compose up -d` again. |
 | `400` / `502` when scanning a database | Wrong host, port or credentials, or the database is unreachable from the `app` container. |
 | `502` from `/classify` | The LLM call failed: `LLM_API_KEY` is missing or invalid, or the account has no quota. The `detail` field says which. |
