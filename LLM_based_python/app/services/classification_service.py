@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.exceptions import InvalidRequestError, NotFoundError
+from app.core.metrics import CLASSIFICATION_CACHE
 from app.core.security import SecretCipher
 from app.domain.schemas import ChecksumEvidenceOut, ClassifyRequest, ClassifyResponse
 from app.infrastructure.database.target_database import ConnectionInfo, connect_target, fetch_samples
@@ -55,7 +56,9 @@ async def classify_column(
     if ttl > 0 and not request.force_refresh:
         hit = await classification_repository.get_fresh(session, column.id, key, now - timedelta(seconds=ttl))
         if hit is not None:
+            CLASSIFICATION_CACHE.labels("hit").inc()
             return ClassifyResponse.model_validate({**hit.result, "cached": True})
+        CLASSIFICATION_CACHE.labels("miss").inc()
 
     masking_mode = settings.sample_masking_mode
     samples = [mask_sample(value, masking_mode) for value in raw_samples]

@@ -9,7 +9,13 @@ from dataclasses import dataclass, field
 import asyncpg
 
 from app.core.config import Settings
-from app.core.exceptions import InvalidRequestError, StaleMetadataError, TargetDatabaseError
+from app.core.exceptions import (
+    InvalidRequestError,
+    StaleMetadataError,
+    TargetDatabaseError,
+    TargetHostNotAllowedError,
+)
+from app.core.metrics import TARGET_DB_CONNECTIONS
 from app.domain.enums import SslMode
 from app.infrastructure.database.host_policy import allowed_addresses
 
@@ -69,7 +75,11 @@ async def connect_target(info: ConnectionInfo, settings: Settings) -> AsyncItera
     to, so it gets the host name (a changed DNS answer must then also present a valid certificate).
     """
     try:
-        addresses = await allowed_addresses(info.host, info.port, settings)
+        try:
+            addresses = await allowed_addresses(info.host, info.port, settings)
+        except TargetHostNotAllowedError:
+            TARGET_DB_CONNECTIONS.labels("denied").inc()
+            raise
         verify_name = settings.target_db_ssl_mode == SslMode.VERIFY_FULL
         conn = await asyncpg.connect(
             host=info.host if verify_name else addresses,
@@ -86,9 +96,11 @@ async def connect_target(info: ConnectionInfo, settings: Settings) -> AsyncItera
             },
         )
     except (TimeoutError, OSError, ssl.SSLError, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+        TARGET_DB_CONNECTIONS.labels("error").inc()
         # Driver messages can contain user names or server details; keep them out of the response.
         logger.warning("Target DB connection to %s failed: %s", info.describe(), _error_code(exc))
         raise TargetDatabaseError(CONNECT_ERROR) from exc
+    TARGET_DB_CONNECTIONS.labels("ok").inc()
     try:
         yield conn
     finally:

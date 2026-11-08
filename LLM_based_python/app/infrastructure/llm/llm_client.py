@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -8,6 +9,7 @@ import httpx
 
 from app.core.config import Settings
 from app.core.exceptions import LLMError
+from app.core.metrics import LLM_REQUEST_DURATION, LLM_REQUESTS
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,17 @@ class LLMClient:
         raise LLMError(f"LLM returned an unusable response after {attempts} attempts: {last_error}")
 
     async def _send(self, body: dict[str, Any]) -> str:
+        start = time.perf_counter()
+        outcome = "error"
+        try:
+            content = await self._send_with_retries(body)
+            outcome = "ok"
+            return content
+        finally:
+            LLM_REQUESTS.labels(outcome).inc()
+            LLM_REQUEST_DURATION.observe(time.perf_counter() - start)
+
+    async def _send_with_retries(self, body: dict[str, Any]) -> str:
         error = "LLM request failed"
         for attempt in range(self._max_retries + 1):
             try:

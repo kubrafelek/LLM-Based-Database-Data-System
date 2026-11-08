@@ -128,3 +128,33 @@ async def test_readiness_with_a_reachable_system_db(api):
     response = await api.get("/health/ready")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "checks": {"system_db": "ok"}}
+
+
+async def test_metrics_follow_a_classification(api, target_request):
+    """Target connections, LLM calls and cache lookups show up in /metrics."""
+    from prometheus_client import REGISTRY
+
+    def value(name: str, **labels: str) -> float:
+        return REGISTRY.get_sample_value(name, labels) or 0
+
+    settings = get_settings()
+    auth = (settings.auth_username, settings.auth_password)
+    before = {
+        "connect_ok": value("target_db_connections_total", outcome="ok"),
+        "llm_ok": value("llm_requests_total", outcome="ok"),
+        "miss": value("classification_cache_total", result="miss"),
+        "hit": value("classification_cache_total", result="hit"),
+    }
+    payload = target_request.model_dump() | {"password": target_request.password.get_secret_value()}
+    detail = (await api.post("/api/v1/db/metadata", json=payload, auth=auth)).json()
+    customers = next(t for t in detail["tables"] if t["table_name"] == "customers")
+    email = next(c["column_id"] for c in customers["columns"] if c["column_name"] == "email")
+    for _ in range(2):  # miss, then hit
+        assert (await api.post("/api/v1/classify", json={"column_id": email}, auth=auth)).status_code == 200
+
+    assert value("target_db_connections_total", outcome="ok") == before["connect_ok"] + 3
+    assert value("llm_requests_total", outcome="ok") == before["llm_ok"] + 1
+    assert value("classification_cache_total", result="miss") == before["miss"] + 1
+    assert value("classification_cache_total", result="hit") == before["hit"] + 1
+    text = (await api.get("/metrics")).text
+    assert 'route="/api/v1/classify",status="200"' in text

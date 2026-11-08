@@ -77,6 +77,28 @@ def test_logout_needs_a_bearer_token(client, credentials):
     assert response.json() == {"detail": "Only Bearer tokens can be revoked; Basic credentials have no session"}
 
 
+def test_every_response_carries_a_request_id(client):
+    generated = client.get("/health").headers.get("x-request-id")
+    assert generated and len(generated) >= 16
+    assert client.get("/api/v1/metadata").headers.get("x-request-id")  # error responses too
+    echoed = client.get("/health", headers={"X-Request-ID": "contract-trace-1"})
+    assert echoed.headers["x-request-id"] == "contract-trace-1"
+    replaced = client.get("/health", headers={"X-Request-ID": "not allowed!"})
+    assert replaced.headers["x-request-id"] not in ("not allowed!", "")
+
+
+def test_metrics_are_served_in_prometheus_format(client):
+    client.get("/api/v1/metadata")  # one 401, so the counter has a sample
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    body = response.text
+    assert "# TYPE http_requests_total counter" in body
+    assert 'route="/api/v1/metadata"' in body
+    for name in ("http_request_duration_seconds", "llm_requests_total", "classification_cache_total"):
+        assert name in body
+
+
 def test_readiness_checks_the_system_database(client):
     response = client.get("/health/ready")
     assert response.status_code == 200

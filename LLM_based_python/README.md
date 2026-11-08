@@ -102,6 +102,7 @@ Base URL: `http://localhost:8000/api/v1`. The examples use the default credentia
 |---|---|---|
 | `GET` | `/health` | Liveness check (no auth) |
 | `GET` | `/health/ready` | Readiness: `200` when the system DB answers, `503` otherwise (no auth) |
+| `GET` | `/metrics` | Prometheus metrics (no auth unless `METRICS_TOKEN` is set; not in Swagger) |
 | `POST` | `/api/v1/auth` | Get a JWT |
 | `POST` | `/api/v1/auth/logout` | Revoke the Bearer token sent with the request |
 | `POST` | `/api/v1/db/metadata` | Connect to a database and store its metadata |
@@ -570,11 +571,49 @@ All settings come from `.env`; [.env.example](.env.example) lists and explains e
 | `MAX_SAMPLE_COUNT` | `100` | Upper limit for `sample_count` |
 | `CHECKSUM_VALIDATION_ENABLED` | `true` | Fuse TCKN / Luhn / email / IP checks into the result |
 | `CLASSIFICATION_CACHE_TTL_SECONDS` | `86400` | Cache lifetime; `0` disables the cache |
+| `LOG_FORMAT` | `text` | `text` or `json` (one object per line); both carry the request ID |
+| `METRICS_TOKEN` | empty | Bearer token required by `GET /metrics`; empty = open |
 | `TARGET_DB_SSL_MODE`, `TARGET_DB_SSL_ROOT_CERT` | `prefer`, empty | TLS to target DBs: `disable`, `prefer`, `require`, `verify-ca`, `verify-full`; CA bundle for the `verify-*` modes (system trust store when empty) |
 | `TARGET_DB_ALLOWED_HOSTS` | empty | Hostnames, IPs or CIDRs targets may use; empty = any host except the denied ones (see Security) |
 | `AUTH_MAX_FAILED_ATTEMPTS`, `AUTH_MAX_FAILED_ATTEMPTS_PER_IP`, `AUTH_FAILURE_WINDOW_SECONDS` | `5`, `20`, `300` | Failed logins allowed per client IP + username and per client IP within the window; `0` disables a limit |
 
 **LLM providers:** any OpenAI-compatible API works: OpenAI (`https://api.openai.com/v1`), Ollama (`http://ollama:11434/v1`, or `http://host.docker.internal:11434/v1` when installed on the host), vLLM, LM Studio, Azure OpenAI. Leave `LLM_API_KEY` empty if the provider needs no key; set `LLM_JSON_MODE=false` if it rejects `response_format`.
+
+## Observability
+
+**Request ID.** Every response has an `X-Request-ID` header. A caller's own `X-Request-ID` is reused when it is 1–128 characters of `A–Z a–z 0–9 . _ -` (so a gateway's trace ID follows the request); otherwise a new 32-character hex ID is generated. The ID is in every log line written while handling the request, including the 500 handler, so a user can quote it when reporting an error.
+
+**Logs.** `LOG_FORMAT=text` (default) prints `time level [logger] [request_id] message`. `LOG_FORMAT=json` prints one JSON object per line, uvicorn's own lines included:
+
+```json
+{"timestamp": "2026-11-08T08:11:05.764+00:00", "level": "INFO", "logger": "app.access", "message": "GET /health 200 0.8ms", "request_id": "json-check-7", "method": "GET", "path": "/health", "status": 200, "duration_ms": 0.8, "client_ip": "127.0.0.1"}
+```
+
+Each request writes one `app.access` line (method, path without query string, status, duration, client IP); uvicorn's access log is turned off so it is not duplicated. Errors add an `exception` field with the traceback. Credentials and sample values are never logged.
+
+**Metrics.** `GET /metrics` in Prometheus text format:
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `http_requests_total` | `method`, `route`, `status` | Requests; `route` is the template (`/api/v1/metadata/{metadata_id}`), `/ui/*` for UI files, `unmatched` for unknown paths |
+| `http_request_duration_seconds` | `method`, `route` | Histogram of request durations |
+| `llm_requests_total` | `outcome` (`ok`, `error`) | LLM calls (retries count as one call) |
+| `llm_request_duration_seconds` | | Histogram of LLM call durations, retries included |
+| `classification_cache_total` | `result` (`hit`, `miss`) | Cache lookups (not counted with `force_refresh` or TTL 0) |
+| `login_failures_total`, `login_throttled_total` | | Wrong passwords; logins refused with `429` |
+| `target_db_connections_total` | `outcome` (`ok`, `error`, `denied`) | Target DB connections; `denied` = host policy |
+
+Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: llm-data-discovery
+    metrics_path: /metrics
+    authorization: {credentials: "<METRICS_TOKEN>"}   # omit when METRICS_TOKEN is empty
+    static_configs: [{targets: ["app:8000"]}]
+```
+
+Metrics are per process (as with the login limiter); with several workers, scrape each one.
 
 ## Project layout
 

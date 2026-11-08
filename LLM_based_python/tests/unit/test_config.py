@@ -26,6 +26,7 @@ def test_test_environment_settings_are_valid():
         ({"auth_password": "  "}, "AUTH_PASSWORD must not be empty"),
         ({"target_db_ssl_root_cert": "/no/such/ca.crt"}, "TARGET_DB_SSL_ROOT_CERT file not found"),
         ({"target_db_ssl_mode": "sometimes"}, "target_db_ssl_mode"),
+        ({"log_format": "xml"}, "log_format"),
     ],
 )
 def test_invalid_configuration_fails_with_a_clear_message(overrides, message):

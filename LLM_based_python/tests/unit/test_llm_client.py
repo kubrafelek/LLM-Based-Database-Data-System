@@ -148,3 +148,19 @@ async def test_raises_after_exhausting_parse_retries():
     client, _ = make_client([ok("nope"), ok("still nope")], parse_retries=1)
     with pytest.raises(LLMError, match="unusable response after 2 attempts"):
         await client.complete_json([], identity)
+
+
+async def test_calls_are_counted_by_outcome_with_retries_as_one_call():
+    from prometheus_client import REGISTRY
+
+    def count(outcome: str) -> float:
+        return REGISTRY.get_sample_value("llm_requests_total", {"outcome": outcome}) or 0
+
+    ok_before, error_before = count("ok"), count("error")
+    client, _ = make_client([httpx.Response(503), ok('{"a": 1}')], max_retries=1)
+    await client.complete_json([], identity)
+    client, _ = make_client([httpx.Response(500), httpx.Response(500)], max_retries=1)
+    with pytest.raises(LLMError):
+        await client.complete_json([], identity)
+    assert count("ok") == ok_before + 1
+    assert count("error") == error_before + 1

@@ -4,6 +4,8 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.core.exceptions import TooManyAttemptsError
+from app.core.metrics import LOGIN_FAILURES, LOGIN_THROTTLED
 from app.core.rate_limit import LoginAttemptLimiter
 from app.core.security import dummy_password_hash, hash_password, verify_password
 from app.domain.models import User
@@ -27,11 +29,16 @@ async def authenticate_throttled(
 
     The check runs before the password hash, so a blocked client cannot keep testing passwords.
     """
-    limiter.check(client_ip, username)
+    try:
+        limiter.check(client_ip, username)
+    except TooManyAttemptsError:
+        LOGIN_THROTTLED.inc()
+        raise
     if await authenticate(session, username, password):
         limiter.record_success(client_ip, username)
         return True
     limiter.record_failure(client_ip, username)
+    LOGIN_FAILURES.inc()
     # No username in the log: people sometimes type their password into that field.
     logger.warning("Failed login from %s", client_ip)
     return False

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -8,22 +9,23 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 
 from app.api.dependencies import SessionDep, get_llm_client
+from app.api.observability import ObservabilityMiddleware
 from app.api.routes import api_router, legacy_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError
+from app.core.logging_config import configure_logging
+from app.core.request_context import REQUEST_ID_HEADER
 from app.infrastructure.database.system_database import dispose_engine, get_sessionmaker
 from app.services.auth_service import ensure_admin_user
 
 settings = get_settings()
 STATIC_DIR = Path(__file__).parent / "static"
 
-logging.basicConfig(
-    level=settings.log_level,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+configure_logging(settings.log_level, settings.log_format)
 logger = logging.getLogger(__name__)
 
 
@@ -86,10 +88,15 @@ async def ui_security_headers(request: Request, call_next: Callable[[Request], A
 
 
 @app.exception_handler(Exception)
-async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
-    """Anything unexpected: the same JSON shape, no stack trace or driver message in the response."""
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    """Anything unexpected: the same JSON shape, no stack trace or driver message in the response.
+
+    Runs outside the app middleware, so the request ID is taken from the scope; the client can quote it.
+    """
     logger.exception("Unhandled error: %s", exc.__class__.__name__)
-    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+    request_id = request.scope.get("request_id")
+    headers = {REQUEST_ID_HEADER: request_id} if request_id else None
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"}, headers=headers)
 
 
 @app.exception_handler(AppError)
@@ -98,6 +105,9 @@ async def handle_app_error(_: Request, exc: AppError) -> JSONResponse:
         logger.error("%s: %s", exc.__class__.__name__, exc.detail)
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
 
+
+# Added last, so it is the outermost app middleware: every response (also 401/413) gets the request ID.
+app.add_middleware(ObservabilityMiddleware)
 
 app.include_router(api_router)
 app.include_router(legacy_router)
@@ -125,6 +135,18 @@ async def ready(session: SessionDep) -> JSONResponse:
         logger.warning("Readiness check failed: system DB %s", exc.__class__.__name__)
         return JSONResponse(status_code=503, content={"status": "unavailable", "checks": {"system_db": "unavailable"}})
     return JSONResponse(content={"status": "ok", "checks": {"system_db": "ok"}})
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics(request: Request) -> Response:
+    """Prometheus metrics. Protected by METRICS_TOKEN when it is set."""
+    if settings.metrics_token:
+        supplied = request.headers.get("Authorization", "")
+        if not secrets.compare_digest(supplied.encode(), f"Bearer {settings.metrics_token}".encode()):
+            return JSONResponse(
+                status_code=401, content={"detail": "Not authenticated"}, headers={"WWW-Authenticate": "Bearer"}
+            )
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # Browser UI over the same /api/v1 endpoints (same origin, so no CORS needed).

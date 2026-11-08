@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Application
     app_env: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
+    # When set, GET /metrics needs "Authorization: Bearer <METRICS_TOKEN>"; empty = open (restrict it at the proxy)
+    metrics_token: str = ""
     cors_allowed_origins: str = ""  # comma-separated; empty disables CORS
     max_request_body_bytes: int = 64 * 1024
 
