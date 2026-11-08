@@ -94,7 +94,7 @@ async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
 async def handle_app_error(_: Request, exc: AppError) -> JSONResponse:
     if exc.status_code >= 500:
         logger.error("%s: %s", exc.__class__.__name__, exc.detail)
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
 
 
 app.include_router(api_router)

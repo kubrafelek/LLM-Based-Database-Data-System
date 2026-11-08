@@ -2,9 +2,11 @@
 
 import asyncpg
 import pytest
+from pydantic import SecretStr
 
 from app.api.dependencies import get_cipher
 from app.core.config import get_settings
+from app.core.exceptions import TargetHostNotAllowedError
 from app.domain.schemas import ClassifyRequest
 from app.infrastructure.database.target_database import ConnectionInfo, connect_target
 from app.services import metadata_service
@@ -56,3 +58,19 @@ async def test_readonly_role_cannot_write_even_outside_read_only_mode(readonly_t
             await conn.execute("CREATE TABLE ro_probe (id int)")
     finally:
         await conn.close()
+
+
+async def test_system_database_cannot_be_used_as_a_target(session, target_request):
+    # Valid credentials for the system DB must not let a caller read the service's own tables.
+    settings = get_settings()
+    request = target_request.model_copy(
+        update={
+            "host": settings.system_db_host,
+            "port": settings.system_db_port,
+            "database": settings.system_db_name,
+            "username": settings.system_db_user,
+            "password": SecretStr(settings.system_db_password),
+        }
+    )
+    with pytest.raises(TargetHostNotAllowedError):
+        await metadata_service.create_metadata(session, request, settings, get_cipher())

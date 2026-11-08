@@ -52,7 +52,7 @@ curl http://localhost:8000/health        # {"status":"ok"}
 
 This starts three containers: `app` (port `8000`), `system-db`, and `demo-db` (host port `5433`). On every start:
 
-- the app runs `alembic upgrade head` (migrations `0001`, `0002`) and creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`;
+- the app runs `alembic upgrade head` (migrations `0001`–`0003`) and creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`;
 - `demo-db` runs the scripts in [db/demo/](db/demo/) only when its volume is empty (demo data plus the SELECT-only login `discovery_reader`).
 
 | URL | What |
@@ -522,11 +522,12 @@ All errors return `{"detail": ...}`.
 
 | Status | When |
 |---|---|
-| `400` | `POST /db/metadata` cannot connect with the given details |
+| `400` | `POST /db/metadata` cannot connect with the given details, or the target host is not allowed (see `TARGET_DB_ALLOWED_HOSTS`) |
 | `401` | Missing or invalid credentials / token |
 | `404` | Unknown metadata or column ID |
 | `409` | The column or table no longer exists in the target DB (snapshot is stale) |
 | `413` | Request body larger than `MAX_REQUEST_BODY_BYTES` |
+| `429` | Too many failed logins from this client (`POST /auth` or Basic credentials); wait for `Retry-After` seconds |
 | `422` | Validation error (missing field, bad UUID, `sample_count` out of range, unknown `schema_name`) |
 | `502` | Target DB unreachable, or the LLM failed / returned unusable output |
 
@@ -542,6 +543,8 @@ All settings come from `.env`; [.env.example](.env.example) lists and explains e
 | `MAX_SAMPLE_COUNT` | `100` | Upper limit for `sample_count` |
 | `CHECKSUM_VALIDATION_ENABLED` | `true` | Fuse TCKN / Luhn / email / IP checks into the result |
 | `CLASSIFICATION_CACHE_TTL_SECONDS` | `86400` | Cache lifetime; `0` disables the cache |
+| `TARGET_DB_ALLOWED_HOSTS` | empty | Hostnames, IPs or CIDRs targets may use; empty = any host except the denied ones (see Security) |
+| `AUTH_MAX_FAILED_ATTEMPTS`, `AUTH_MAX_FAILED_ATTEMPTS_PER_IP`, `AUTH_FAILURE_WINDOW_SECONDS` | `5`, `20`, `300` | Failed logins allowed per client IP + username and per client IP within the window; `0` disables a limit |
 
 **LLM providers:** any OpenAI-compatible API works: OpenAI (`https://api.openai.com/v1`), Ollama (`http://ollama:11434/v1`, or `http://host.docker.internal:11434/v1` when installed on the host), vLLM, LM Studio, Azure OpenAI. Leave `LLM_API_KEY` empty if the provider needs no key; set `LLM_JSON_MODE=false` if it rejects `response_format`.
 
@@ -553,7 +556,7 @@ app/
   services/            business logic (metadata, classification, masking, checksums, cache)
   repositories/        system DB queries
   infrastructure/      target DB access, LLM client and prompts
-  core/                config, security (JWT, Argon2, AES-GCM)
+  core/                config, security (JWT, Argon2, AES-GCM), login throttling
   domain/              ORM models and request/response schemas
 alembic/               system DB migrations
 db/demo/               demo database init scripts
@@ -572,13 +575,15 @@ tests/                 unit, integration, e2e, contract
 ## Security Considerations
 
 - All `/api/v1` endpoints except `/auth` need a JWT or Basic credentials. Passwords are hashed with Argon2id.
+- Failed logins (`/auth` and Basic credentials alike) are throttled per client IP + username and per client IP; over the limit the API answers `429` with `Retry-After`, before checking the password. Keying on the IP means a stranger cannot lock the admin out. The counts are kept in memory, per process: with several workers or replicas, add a limit at the reverse proxy or a shared store.
 - Target DB passwords are encrypted with AES-256-GCM and never returned. Changing `ENCRYPTION_KEY` makes stored connections unreadable.
 - Target access has two layers: read-only sessions with a statement timeout, and a SELECT-only login (`discovery_reader` in the demo).
 - Identifiers are validated and quoted; the only SQL value (sample limit) is bound. LLM output is validated, never executed.
 - No credentials or sample values are logged; API errors are generic. CORS is off unless `CORS_ALLOWED_ORIGINS` is set.
 - The app refuses to start with weak secrets, or with `.env.example` values when `APP_ENV=production`.
 - Masked samples still leave the system. For real personal data use a self-hosted model (Ollama profile) or a provider with suitable KVKK/GDPR terms.
-- Run behind TLS in production. `POST /db/metadata` connects to caller-supplied hosts, so restrict egress.
+- `POST /db/metadata` connects to caller-supplied hosts, so every target host is checked first ([host_policy.py](app/infrastructure/database/host_policy.py)): the system database is never allowed; link-local (cloud metadata `169.254.169.254`), multicast, unspecified and reserved addresses are always denied; loopback only when listed in `TARGET_DB_ALLOWED_HOSTS`. All resolved addresses must pass, and the connection uses those addresses (no second DNS lookup, so DNS rebinding cannot bypass the check). Private ranges stay allowed so internal databases work; in production set `TARGET_DB_ALLOWED_HOSTS` and restrict egress as well.
+- Run behind TLS in production.
 
 ## Design Decisions
 
@@ -602,4 +607,6 @@ The full decision log and evaluation results are in [../TASK.md](../TASK.md).
 - A cache hit still queries the target DB (to fingerprint the samples).
 - One bootstrap admin user, no user management endpoints.
 - The body size limit relies on `Content-Length`; a reverse proxy should enforce a hard limit.
+- Login throttling is in memory and per process (reset on restart, not shared between replicas).
+- Target DB connections do not use TLS (`sslmode`).
 - Migration `0002` is irreversible.

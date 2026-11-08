@@ -3,8 +3,9 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 
-from app.api.dependencies import get_llm_client
+from app.api.dependencies import get_llm_client, get_login_limiter
 from app.core.config import get_settings
+from app.core.rate_limit import LoginAttemptLimiter
 from app.infrastructure.database.system_database import get_session
 from app.main import app
 from app.services.auth_service import ensure_admin_user
@@ -30,6 +31,9 @@ async def api(sessionmaker, llm_provider) -> AsyncIterator[httpx.AsyncClient]:  
 
     app.dependency_overrides[get_session] = test_session
     app.dependency_overrides[get_llm_client] = llm_provider.client
+    # A fresh limiter per test, so failed logins in one test cannot block another.
+    limiter = LoginAttemptLimiter.from_settings(get_settings())
+    app.dependency_overrides[get_login_limiter] = lambda: limiter
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client

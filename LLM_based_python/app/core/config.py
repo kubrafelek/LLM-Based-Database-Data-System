@@ -3,7 +3,7 @@ import binascii
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
+    # Failed-login throttling (in memory, per process). 0 disables a limit.
+    auth_max_failed_attempts: int = Field(default=5, ge=0)  # per client IP + username
+    auth_max_failed_attempts_per_ip: int = Field(default=20, ge=0)  # per client IP, any username
+    auth_failure_window_seconds: int = Field(default=300, ge=1)
 
     # Base64-encoded 32-byte key used to encrypt stored target DB passwords (AES-256-GCM)
     encryption_key: str
@@ -61,6 +65,10 @@ class Settings(BaseSettings):
     # Target database access and sampling
     target_db_connect_timeout_seconds: float = 10.0
     target_db_statement_timeout_ms: int = 15000
+    # Comma-separated hostnames, IPs or CIDRs a target may use. Empty = any host except the denied
+    # ones (system DB, loopback, link-local/cloud metadata, multicast, unspecified, reserved).
+    # A listed loopback address or hostname is allowed; the system DB never is.
+    target_db_allowed_hosts: str = ""
     max_sample_count: int = 100
     sample_masking_mode: MaskingMode = MaskingMode.PARTIAL
     # Fuse TCKN / Luhn checks on the raw samples into the LLM distribution
@@ -105,6 +113,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
+    @property
+    def target_allowed_hosts(self) -> list[str]:
+        return [entry.strip() for entry in self.target_db_allowed_hosts.split(",") if entry.strip()]
 
     @property
     def system_db_url(self) -> str:

@@ -3,9 +3,10 @@ class AppError(Exception):
 
     status_code = 500
 
-    def __init__(self, detail: str):
+    def __init__(self, detail: str, headers: dict[str, str] | None = None):
         super().__init__(detail)
         self.detail = detail
+        self.headers = headers
 
 
 class NotFoundError(AppError):
@@ -20,6 +21,21 @@ class InvalidConnectionError(AppError):
     """User-supplied connection details could not be used."""
 
     status_code = 400
+
+
+class TargetHostNotAllowedError(AppError):
+    """The target host is the system DB or outside the configured target host policy."""
+
+    status_code = 400
+
+
+class TooManyAttemptsError(AppError):
+    """Too many failed logins; the client must wait before trying again."""
+
+    status_code = 429
+
+    def __init__(self, retry_after: int):
+        super().__init__("Too many failed login attempts. Try again later.", {"Retry-After": str(retry_after)})
 
 
 class StaleMetadataError(AppError):

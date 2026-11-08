@@ -134,3 +134,33 @@ def test_unexpected_errors_return_generic_json():
     assert response.status_code == 500
     assert response.json() == {"detail": "Internal Server Error"}
     assert "password" not in response.text
+
+
+def test_repeated_wrong_passwords_get_429_with_retry_after(monkeypatch):
+    from app.api.dependencies import get_login_limiter, get_session
+    from app.core.rate_limit import LoginAttemptLimiter
+    from app.services import auth_service
+
+    async def no_session():
+        yield None
+
+    async def wrong_password(session, username, password):
+        return False
+
+    monkeypatch.setattr(auth_service, "authenticate", wrong_password)
+    limiter = LoginAttemptLimiter(max_per_user=2, max_per_ip=10, window_seconds=60)
+    app.dependency_overrides[get_session] = no_session
+    app.dependency_overrides[get_login_limiter] = lambda: limiter
+    try:
+        body = {"username": "admin", "password": "guess"}
+        assert client.post("/api/v1/auth", json=body).status_code == 401
+        assert client.post("/api/v1/auth", json=body).status_code == 401
+        blocked = client.post("/api/v1/auth", json=body)
+        # Basic credentials on a protected endpoint share the same limit.
+        basic = client.get("/api/v1/metadata", auth=("admin", "guess"))
+    finally:
+        app.dependency_overrides.clear()
+    assert blocked.status_code == 429
+    assert blocked.json() == {"detail": "Too many failed login attempts. Try again later."}
+    assert 1 <= int(blocked.headers["retry-after"]) <= 60
+    assert basic.status_code == 429

@@ -4,6 +4,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.core.rate_limit import LoginAttemptLimiter
 from app.core.security import dummy_password_hash, hash_password, verify_password
 from app.domain.models import User
 from app.repositories import user_repository
@@ -17,6 +18,23 @@ async def authenticate(session: AsyncSession, username: str, password: str) -> b
     password_hash = user.password_hash if user is not None else dummy_password_hash()
     valid = await asyncio.to_thread(verify_password, password, password_hash)
     return user is not None and valid
+
+
+async def authenticate_throttled(
+    session: AsyncSession, username: str, password: str, client_ip: str, limiter: LoginAttemptLimiter
+) -> bool:
+    """authenticate() behind the failed-login limiter: raises TooManyAttemptsError (429) while blocked.
+
+    The check runs before the password hash, so a blocked client cannot keep testing passwords.
+    """
+    limiter.check(client_ip, username)
+    if await authenticate(session, username, password):
+        limiter.record_success(client_ip, username)
+        return True
+    limiter.record_failure(client_ip, username)
+    # No username in the log: people sometimes type their password into that field.
+    logger.warning("Failed login from %s", client_ip)
+    return False
 
 
 async def ensure_admin_user(session: AsyncSession, settings: Settings) -> None:

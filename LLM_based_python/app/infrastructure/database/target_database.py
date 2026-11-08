@@ -9,6 +9,7 @@ import asyncpg
 
 from app.core.config import Settings
 from app.core.exceptions import InvalidRequestError, StaleMetadataError, TargetDatabaseError
+from app.infrastructure.database.host_policy import allowed_addresses
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +44,15 @@ def _error_code(exc: Exception) -> str:
 
 @asynccontextmanager
 async def connect_target(info: ConnectionInfo, settings: Settings) -> AsyncIterator[asyncpg.Connection]:
-    """Open a read-only, time-limited connection to a target database."""
+    """Open a read-only, time-limited connection to a target database.
+
+    The host must pass the target host policy (host_policy.py); TargetHostNotAllowedError otherwise.
+    The connection goes to the addresses that were checked, not to a fresh DNS lookup.
+    """
     try:
+        addresses = await allowed_addresses(info.host, info.port, settings)
         conn = await asyncpg.connect(
-            host=info.host,
+            host=addresses,
             port=info.port,
             database=info.database,
             user=info.username,

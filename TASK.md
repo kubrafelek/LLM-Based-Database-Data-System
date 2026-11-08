@@ -8,7 +8,7 @@ Legend: ✅ Done · 🟡 Partial (deviates from spec) · ⬜ Not started
 
 ## 1. Current Status
 
-**Last updated:** 2026-11-07
+**Last updated:** 2026-11-08
 **Phase:** Both tasks complete. Python: 29/29 with a real LLM. Java port: contract 37/37, evaluation 29/29 (`LLM_based_java/docs/MIGRATION_REPORT.md`).
 
 | # | Phase | Status | Notes |
@@ -20,7 +20,7 @@ Legend: ✅ Done · 🟡 Partial (deviates from spec) · ⬜ Not started
 | 5 | Metadata extraction | ✅ | `pg_catalog`, optional schema filter, generic errors |
 | 6 | Metadata CRUD | ✅ | `/api/v1` + PDF aliases; pagination |
 | 7 | LLM classification | ✅ | Masking, 12 keys + `pii_likelihood`, validation, retries, deterministic checks, cache |
-| 8 | Security | ✅ | All spec §9 controls; SELECT-only target login (D16) |
+| 8 | Security | ✅ | All spec §9 controls; SELECT-only target login (D16); login throttling (D21), target host policy (D22), Python only |
 | 9 | Testing | ✅ | Python 203 (97% cov), Java 169 (90% cov), contract 37 on both; CI |
 | 10 | Docker & docs | ✅ | Compose, README, web UI at `/ui/` |
 | 11 | Java migration | ✅ | Spring Boot / Java 21; golden 102/102 (D18, D19) |
@@ -89,12 +89,16 @@ All met: FastAPI + PostgreSQL + OpenAI-compatible LLM + Docker; Basic auth with 
 | D18 | Java stack | Java 21, Spring Boot 3.5, Maven, JPA + Flyway, JDBC for targets, `RestClient`, Argon2id/JWT interchangeable with Python, `{"detail"}` errors |
 | D19 | Verification | Unchanged Python contract suite against Java; golden data from Python; tmpfs DBs instead of Testcontainers. Fix the port, not the spec |
 | D20 | Secrets | Dev-only keys in `.env.example`; startup validation rejects them in production. Connection deleted with its last snapshot |
+| D21 | Login throttling | Failed logins (`/auth` and Basic) counted in a sliding window per client IP + username (5) and per IP (20) over 300 s; over the limit → `429` + `Retry-After`, checked before Argon2. Not keyed on username alone, so others cannot lock the admin out. In memory, per process (documented); key count bounded |
+| D22 | Target host policy | Checked in `connect_target` (covers extraction and classify): system DB never; link-local/metadata, multicast, unspecified, reserved always denied; loopback only if listed; optional allow list `TARGET_DB_ALLOWED_HOSTS` (hostnames, IPs, CIDRs). Every resolved address must pass and asyncpg connects to those addresses (no DNS rebinding). Private ranges allowed by default (demo-db, internal DBs). Denied → `400` |
 
 ---
 
 ## 5. Next Steps
 
 - Optional: batch / whole-table classification endpoint (fewer LLM calls, shared context).
+- Port D21 (login throttling) and D22 (target host policy) to Java. Not in the contract suite: a lockout test would block later tests, and the host check needs a system-DB target.
+- Remaining review items: TLS (`sslmode`) for target connections, mypy in CI, readiness check, token revocation.
 
 ### 5a. External Checklist Review
 
@@ -108,13 +112,13 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - Contract: `docker compose --profile contract run --rm contract-tests` (real deployment + LLM).
 - Java: `docker compose --profile test run --build --rm tests mvn -B test` in `LLM_based_java/`.
 
-**Totals (measured 2026-11-07):** Python 203 (unit 171, integration 27, e2e 5) · contract 37 · Java 169 (unit 141, integration 28). Counts include parametrized cases.
+**Totals (Python measured 2026-11-08, Java 2026-11-07):** Python 235 (unit 202, integration 28, e2e 5; 97% cov) · contract 37 · Java 169 (unit 141, integration 28). Counts include parametrized cases.
 
-### Python unit (171)
+### Python unit (202)
 
 | File | # | Covers |
 |---|---|---|
-| `test_api.py` | 23 | Auth required, 401/422/413, OpenAPI paths, aliases, CORS, UI + CSP, generic JSON 500 |
+| `test_api.py` | 24 | Auth required, 401/422/413, 429 + Retry-After (JSON and Basic), OpenAPI paths, aliases, CORS, UI + CSP, generic JSON 500 |
 | `test_checksum_evidence.py` | 55 | TCKN, Luhn, email, IP checks; evidence tiers; fusion cases |
 | `test_classification_cache.py` | 10 | Key stability and invalidation; keyed fingerprint |
 | `test_classification_parser.py` | 18 | Normalization, rejection, all-zero handling |
@@ -124,16 +128,18 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 | `test_sample_sanitizer.py` | 13 | none / partial / strict masking |
 | `test_security.py` | 10 | AES-GCM, JWT, Argon2id |
 | `test_target_database.py` | 7 | Identifier quoting, sample query, `inet`, password repr |
+| `test_rate_limit.py` | 9 | Window, Retry-After, expiry, case-insensitive user, no cross-IP lockout, per-IP limit, success reset, 0 disables, bounded keys |
+| `test_host_policy.py` | 21 | System DB (name, alias, IP, even if listed), metadata/link-local/multicast/unspecified/reserved/IPv4-mapped, mixed DNS answers, loopback, allow list, unknown host |
 
-### Python integration (27) and e2e (5)
+### Python integration (28) and e2e (5)
 
 | File | # | Covers |
 |---|---|---|
 | `test_auth_service.py` | 4 | Login, admin seeding |
 | `test_metadata_service.py` | 6 | Extraction, encryption, CRUD, schema filter, generic errors |
-| `test_target_access.py` | 3 | Read-only session and SELECT-only role |
+| `test_target_access.py` | 4 | Read-only session and SELECT-only role; system DB refused as a target |
 | `test_classification_flow.py` | 14 | Masked prompts, evidence, limits, empty column, cache behavior |
-| `test_full_flow.py` | 5 | Full HTTP flow, Basic auth, aliases, unreachable target |
+| `test_full_flow.py` | 5 | Full HTTP flow, Basic auth, aliases, unreachable target (fresh login limiter per test) |
 
 ### Contract (37)
 
@@ -178,6 +184,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - **Step 31:** TASK.md condensed; §6 test counts re-measured (Python 203, Java 169, all passing).
 - **Step 32:** Python README simplified: run guide first, per-endpoint curl examples with success and error cases (verified against the running service), §13 sections kept in short form. Java README anchor updated.
 - **Step 33:** Python UI: Java design ported, plus a plain-language verdict per result (Personal data / Likely X, possibly Y / Mixed content / Not personal data), explained score labels, sample-count note, "How to read the results" panel, host hint. Verified in headless Chrome. README Known Limitations: mixed-content columns (`audit_logs.new_values`: email 0.4, names 0.2×3, stable over 3 forced runs) and sensitive data outside the 12 categories (salary, IBAN).
+- **Step 34 (D21, D22, Python):** Gap review fixes. Login throttling (`core/rate_limit.py`) on `/auth` and Basic auth; `AppError` can carry headers. Target host policy (`infrastructure/database/host_policy.py`) in `connect_target`. New settings in `.env.example`, README (config, errors `400`/`429`, security, limitations). README migration list fixed (`0001`–`0003`). Docker suite 235 passed (97% cov), contract 37/37 against the running service, ruff and mypy clean. Live check: `system-db`, `169.254.169.254`, `localhost` → 400, `demo-db` → 201; 6th wrong login → 429 with `Retry-After: 300`. Java not changed.
 
 ---
 
