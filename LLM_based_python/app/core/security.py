@@ -43,13 +43,21 @@ class TokenClaims:
     subject: str
     token_id: str | None  # "jti"; None for tokens issued before revocation existed
     expires_at: datetime
+    token_version: int = 0  # "ver": the user's token_version at login; 0 for older tokens
 
 
-def create_access_token(subject: str, settings: Settings) -> tuple[str, int]:
-    """A JWT with sub, iat, exp and a random jti, so POST /auth/logout can revoke this one token."""
+def create_access_token(subject: str, settings: Settings, token_version: int = 0) -> tuple[str, int]:
+    """A JWT with sub, iat, exp, a random jti (POST /auth/logout revokes this one token) and the user's
+    token_version as "ver" (raising it, on a password change or POST /auth/logout-all, revokes them all)."""
     expires_in = settings.jwt_expire_minutes * 60
     now = datetime.now(UTC)
-    payload = {"sub": subject, "iat": now, "exp": now + timedelta(seconds=expires_in), "jti": uuid.uuid4().hex}
+    payload = {
+        "sub": subject,
+        "iat": now,
+        "exp": now + timedelta(seconds=expires_in),
+        "jti": uuid.uuid4().hex,
+        "ver": token_version,
+    }
     token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return token, expires_in
 
@@ -65,7 +73,10 @@ def decode_token(token: str, settings: Settings) -> TokenClaims:
     jti = payload.get("jti")
     if jti is not None and (not isinstance(jti, str) or not 0 < len(jti) <= 64):
         raise jwt.InvalidTokenError("invalid jti")
-    return TokenClaims(payload["sub"], jti, datetime.fromtimestamp(payload["exp"], UTC))
+    version = payload.get("ver", 0)
+    if type(version) is not int or version < 0:  # bool is an int subclass; reject it too
+        raise jwt.InvalidTokenError("invalid ver")
+    return TokenClaims(payload["sub"], jti, datetime.fromtimestamp(payload["exp"], UTC), version)
 
 
 def decode_access_token(token: str, settings: Settings) -> str:

@@ -44,3 +44,23 @@ async def test_authenticate(session):
     assert await auth_service.authenticate(session, settings.auth_username, settings.auth_password)
     assert not await auth_service.authenticate(session, settings.auth_username, "wrong")
     assert not await auth_service.authenticate(session, "nobody", settings.auth_password)
+
+
+async def test_a_changed_admin_password_revokes_existing_tokens(session):
+    settings = get_settings()
+    await auth_service.ensure_admin_user(session, settings)
+    before = (await session.scalar(select(User))).token_version
+
+    await auth_service.ensure_admin_user(session, settings)  # unchanged: same version
+    assert (await session.scalar(select(User))).token_version == before
+
+    await auth_service.ensure_admin_user(session, settings.model_copy(update={"auth_password": "rotated-password"}))
+    await session.refresh(await session.scalar(select(User)))
+    assert (await session.scalar(select(User))).token_version == before + 1
+
+
+async def test_authenticate_returns_the_user(session):
+    settings = get_settings()
+    await auth_service.ensure_admin_user(session, settings)
+    user = await auth_service.authenticate(session, settings.auth_username, settings.auth_password)
+    assert user is not None and user.username == settings.auth_username

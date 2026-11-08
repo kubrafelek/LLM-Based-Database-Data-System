@@ -19,7 +19,8 @@ from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging_config import configure_logging
 from app.core.request_context import REQUEST_ID_HEADER
-from app.infrastructure.database.system_database import dispose_engine, get_sessionmaker
+from app.infrastructure.database.schema import ensure_schema_is_current
+from app.infrastructure.database.system_database import dispose_engine, get_engine, get_sessionmaker
 from app.services.auth_service import ensure_admin_user
 
 settings = get_settings()
@@ -31,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    # Fail fast with a clear message instead of SQL errors on the first request.
+    await ensure_schema_is_current(get_engine())
     async with get_sessionmaker()() as session:
         await ensure_admin_user(session, settings)
     yield

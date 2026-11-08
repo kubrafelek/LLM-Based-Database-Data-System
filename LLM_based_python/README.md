@@ -50,9 +50,9 @@ docker compose up --build -d
 curl http://localhost:8000/health        # {"status":"ok"}
 ```
 
-This starts three containers: `app` (port `8000`), `system-db`, and `demo-db` (host port `5433`). On every start:
+This starts `system-db`, `demo-db` (host port `5433`), a one-off `migrate` container and then `app` (port `8000`). On every start:
 
-- the app runs `alembic upgrade head` (migrations `0001`–`0004`) and creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`;
+- `migrate` runs `alembic upgrade head` (migrations `0001`–`0005`) and exits; `app` starts only after it succeeded, checks that the schema is current (it refuses to start otherwise, with the command to run) and creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`;
 - `demo-db` runs the scripts in [db/demo/](db/demo/) only when its volume is empty (demo data plus the SELECT-only login `discovery_reader`).
 
 | URL | What |
@@ -105,6 +105,7 @@ Base URL: `http://localhost:8000/api/v1`. The examples use the default credentia
 | `GET` | `/metrics` | Prometheus metrics (no auth unless `METRICS_TOKEN` is set; not in Swagger) |
 | `POST` | `/api/v1/auth` | Get a JWT |
 | `POST` | `/api/v1/auth/logout` | Revoke the Bearer token sent with the request |
+| `POST` | `/api/v1/auth/logout-all` | Revoke every token of the calling user (Bearer or Basic) |
 | `POST` | `/api/v1/db/metadata` | Connect to a database and store its metadata |
 | `GET` | `/api/v1/metadata` | List metadata snapshots |
 | `GET` | `/api/v1/metadata/{metadata_id}` | Tables and columns of a snapshot |
@@ -177,6 +178,15 @@ curl -s $API/metadata -H "Authorization: Bearer $TOKEN"
 ```
 
 Basic credentials have nothing to revoke → `400`; no or invalid token → `401`.
+
+### `POST /auth/logout-all`
+
+Revokes **every** token of the calling user, for example when a token may have leaked. Works with a Bearer token or with the password (Basic), so it also works when you no longer have a valid token. Changing `AUTH_PASSWORD` and restarting does the same for the admin user.
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST $API/auth/logout-all -u admin:change-me-admin
+# 204 (all earlier tokens now get 401 "Invalid or expired token"; log in again for a new one)
+```
 
 ### `GET /health/ready`
 
@@ -571,6 +581,7 @@ All settings come from `.env`; [.env.example](.env.example) lists and explains e
 | `MAX_SAMPLE_COUNT` | `100` | Upper limit for `sample_count` |
 | `CHECKSUM_VALIDATION_ENABLED` | `true` | Fuse TCKN / Luhn / email / IP checks into the result |
 | `CLASSIFICATION_CACHE_TTL_SECONDS` | `86400` | Cache lifetime; `0` disables the cache |
+| `MIGRATE_ON_START` | `false` | `true`: the app container runs `alembic upgrade head` before starting (single instance without the `migrate` service) |
 | `LOG_FORMAT` | `text` | `text` or `json` (one object per line); both carry the request ID |
 | `METRICS_TOKEN` | empty | Bearer token required by `GET /metrics`; empty = open |
 | `TARGET_DB_SSL_MODE`, `TARGET_DB_SSL_ROOT_CERT` | `prefer`, empty | TLS to target DBs: `disable`, `prefer`, `require`, `verify-ca`, `verify-full`; CA bundle for the `verify-*` modes (system trust store when empty) |
@@ -652,6 +663,8 @@ tests/                 unit, integration, e2e, contract
 - `POST /db/metadata` connects to caller-supplied hosts, so every target host is checked first ([host_policy.py](app/infrastructure/database/host_policy.py)): the system database is never allowed; link-local (cloud metadata `169.254.169.254`), multicast, unspecified and reserved addresses are always denied; loopback only when listed in `TARGET_DB_ALLOWED_HOSTS`. All resolved addresses must pass, and the connection uses those addresses (no second DNS lookup, so DNS rebinding cannot bypass the check). Private ranges stay allowed so internal databases work; in production set `TARGET_DB_ALLOWED_HOSTS` and restrict egress as well.
 - Target DB connections use TLS when the server offers it (`TARGET_DB_SSL_MODE=prefer`, unverified, like libpq). Use `verify-full` with `TARGET_DB_SSL_ROOT_CERT` in production so credentials and samples cannot be read or the server impersonated. In `verify-full` the driver connects to the host name (the certificate is checked against it), so DNS is resolved a second time; a changed answer then also needs a valid certificate. Compose runs `demo-db` with TLS and a development certificate ([db/certs](db/certs/README.md), never for real use).
 - Tokens carry a `jti`; `POST /auth/logout` stores it in `revoked_tokens` until the token's expiry, and every Bearer request checks that table. Tokens issued before this existed have no `jti`: valid until they expire, not revocable.
+- Tokens also carry `ver`, the user's `token_version` at login. A password change (new `AUTH_PASSWORD` + restart) or `POST /auth/logout-all` raises it, so every older token of that user is rejected; tokens of a deleted user are rejected too.
+- Migrations run in the separate `migrate` container, not in the app, so replicas starting together cannot race and the app process does not need to run DDL. Alembic takes a PostgreSQL advisory lock, so two migrators at once are safe (the second finds nothing to do). `MIGRATE_ON_START=true` restores migrate-on-start for a single container without compose.
 - Run behind TLS in production.
 
 ## Design Decisions

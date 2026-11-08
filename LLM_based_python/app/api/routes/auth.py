@@ -1,7 +1,7 @@
 from typing import Annotated
 
 import jwt
-from fastapi import APIRouter, Body, HTTPException, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 
 from app.api.dependencies import (
     INVALID_TOKEN,
@@ -9,13 +9,14 @@ from app.api.dependencies import (
     BearerDep,
     ClientIpDep,
     LoginLimiterDep,
-    RevocationCheckDep,
     SessionDep,
     SettingsDep,
+    TokenValidatorDep,
+    require_user,
 )
 from app.core.security import create_access_token, decode_token
 from app.domain.schemas import LoginRequest, TokenResponse
-from app.repositories import token_repository
+from app.repositories import token_repository, user_repository
 from app.services import auth_service
 
 router = APIRouter(tags=["auth"])
@@ -46,13 +47,14 @@ async def issue_token(
             headers={"WWW-Authenticate": "Basic"},
         )
 
-    if not await auth_service.authenticate_throttled(session, username, password, client_ip, limiter):
+    user = await auth_service.authenticate_throttled(session, username, password, client_ip, limiter)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Basic"},
         )
-    token, expires_in = create_access_token(username, settings)
+    token, expires_in = create_access_token(username, settings, user.token_version)
     return TokenResponse(access_token=token, expires_in=expires_in)
 
 
@@ -62,7 +64,7 @@ async def revoke_token(
     settings: SettingsDep,
     bearer: BearerDep,
     basic: BasicCredentialsDep,
-    is_revoked: RevocationCheckDep,
+    token_is_valid: TokenValidatorDep,
 ) -> Response:
     """Revoke the Bearer token sent with this request; it is rejected from now on."""
     if bearer is None:
@@ -84,10 +86,21 @@ async def revoke_token(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="This token has no ID and cannot be revoked"
         )
-    if await is_revoked(claims.token_id):
+    if not await token_is_valid(claims):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN, headers={"WWW-Authenticate": "Bearer"}
         )
     await token_repository.revoke(session, claims.token_id, claims.expires_at)
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/auth/logout-all", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def revoke_all_tokens(session: SessionDep, username: Annotated[str, Depends(require_user)]) -> Response:
+    """Revoke every token of the calling user (Bearer token or Basic credentials).
+
+    Use it when a token may have leaked: with the password (Basic) it works even without a valid token.
+    """
+    await user_repository.bump_token_version(session, username)
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

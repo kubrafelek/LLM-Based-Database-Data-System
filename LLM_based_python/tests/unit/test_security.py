@@ -108,3 +108,25 @@ def test_token_with_malformed_id_is_rejected(jti):
     token = jwt.encode({"sub": "admin", "exp": future, "jti": jti}, settings.jwt_secret_key, algorithm="HS256")
     with pytest.raises(jwt.InvalidTokenError):
         decode_token(token, settings)
+
+
+def test_tokens_carry_the_token_version():
+    settings = get_settings()
+    assert decode_token(create_access_token("admin", settings, token_version=3)[0], settings).token_version == 3
+    assert decode_token(create_access_token("admin", settings)[0], settings).token_version == 0
+
+
+def test_token_without_version_counts_as_version_zero():
+    settings = get_settings()
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    token = jwt.encode({"sub": "admin", "exp": future}, settings.jwt_secret_key, algorithm="HS256")
+    assert decode_token(token, settings).token_version == 0
+
+
+@pytest.mark.parametrize("ver", ["1", -1, 1.5, True])
+def test_token_with_malformed_version_is_rejected(ver):
+    settings = get_settings()
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    token = jwt.encode({"sub": "admin", "exp": future, "ver": ver}, settings.jwt_secret_key, algorithm="HS256")
+    with pytest.raises(jwt.InvalidTokenError):
+        decode_token(token, settings)

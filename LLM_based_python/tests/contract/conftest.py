@@ -11,6 +11,7 @@ The target must be the case study demo database. Classification calls a real LLM
 tests only assert rules that hold for any LLM answer.
 """
 
+import base64
 import os
 from collections.abc import Iterator
 
@@ -54,8 +55,9 @@ def client() -> Iterator[httpx.Client]:
         yield c
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def auth(client, credentials) -> dict[str, str]:
+    """A fresh token per test: the logout-all test revokes every token issued before it."""
     username, password = credentials
     response = client.post("/api/v1/auth", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
@@ -63,8 +65,15 @@ def auth(client, credentials) -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def snapshot(client, auth, target) -> Iterator[dict]:
+def basic_auth(credentials) -> dict[str, str]:
+    """Basic credentials: unaffected by token revocation, so safe for session-wide fixtures."""
+    return {"Authorization": "Basic " + base64.b64encode(":".join(credentials).encode()).decode()}
+
+
+@pytest.fixture(scope="session")
+def snapshot(client, basic_auth, target) -> Iterator[dict]:
     """One metadata extraction shared by the read-only tests; deleted at the end."""
+    auth = basic_auth
     response = client.post("/api/v1/db/metadata", json=target, headers=auth)
     assert response.status_code == 201, response.text
     detail = response.json()

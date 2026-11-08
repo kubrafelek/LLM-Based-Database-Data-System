@@ -158,3 +158,35 @@ async def test_metrics_follow_a_classification(api, target_request):
     assert value("classification_cache_total", result="hit") == before["hit"] + 1
     text = (await api.get("/metrics")).text
     assert 'route="/api/v1/classify",status="200"' in text
+
+
+async def test_logout_all_revokes_every_token_of_the_user(api):
+    settings = get_settings()
+    body = {"username": settings.auth_username, "password": settings.auth_password}
+    first = (await api.post("/api/v1/auth", json=body)).json()["access_token"]
+    second = (await api.post("/api/v1/auth", json=body)).json()["access_token"]
+
+    response = await api.post("/api/v1/auth/logout-all", headers={"Authorization": f"Bearer {first}"})
+    assert response.status_code == 204
+    for token in (first, second):
+        rejected = await api.get("/api/v1/metadata", headers={"Authorization": f"Bearer {token}"})
+        assert rejected.status_code == 401
+        assert rejected.json() == {"detail": "Invalid or expired token"}
+
+    # A new login works, and the password alone (Basic) can revoke again, e.g. after a token leaked.
+    third = (await api.post("/api/v1/auth", json=body)).json()["access_token"]
+    assert (await api.get("/api/v1/metadata", headers={"Authorization": f"Bearer {third}"})).status_code == 200
+    basic = (settings.auth_username, settings.auth_password)
+    assert (await api.post("/auth/logout-all", auth=basic)).status_code == 204
+    assert (await api.get("/api/v1/metadata", headers={"Authorization": f"Bearer {third}"})).status_code == 401
+
+
+async def test_password_rotation_revokes_existing_tokens(api, sessionmaker):
+    from app.services.auth_service import ensure_admin_user
+
+    settings = get_settings()
+    body = {"username": settings.auth_username, "password": settings.auth_password}
+    token = (await api.post("/api/v1/auth", json=body)).json()["access_token"]
+    async with sessionmaker() as s:  # what a restart with a new AUTH_PASSWORD does
+        await ensure_admin_user(s, settings.model_copy(update={"auth_password": "rotated-password"}))
+    assert (await api.get("/api/v1/metadata", headers={"Authorization": f"Bearer {token}"})).status_code == 401

@@ -10,11 +10,26 @@ services:
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       system-db:
         condition: service_healthy
       demo-db:
         condition: service_healthy
     restart: unless-stopped
+
+  # One-off: brings the system DB schema to the latest revision, then exits; the app starts after it.
+  # Run it by hand after an upgrade without restarting everything: docker compose run --rm migrate
+  migrate:
+    build:
+      context: .
+      target: runtime
+    env_file: .env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      system-db:
+        condition: service_healthy
+    restart: "no"
 
   # Internal database: users, extracted metadata and encrypted connection info.
   system-db:

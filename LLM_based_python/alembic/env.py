@@ -1,6 +1,7 @@
 import asyncio
 from logging.config import fileConfig
 
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -26,9 +27,16 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# Any constant; shared by every process that migrates this database.
+MIGRATION_LOCK_ID = 7_460_157_020
+
+
 def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
+        # Two migrators at once (e.g. MIGRATE_ON_START on several replicas): the second waits here, then
+        # reads the already-updated version and has nothing to do. Released when the transaction ends.
+        connection.execute(text("SELECT pg_advisory_xact_lock(:id)"), {"id": MIGRATION_LOCK_ID})
         context.run_migrations()
 
 

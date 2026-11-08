@@ -11,18 +11,18 @@ from app.main import app
 client = TestClient(app)
 
 
-async def never_revoked(jti: str) -> bool:
-    return False
+async def always_valid(claims) -> bool:
+    return True
 
 
 @pytest.fixture(autouse=True)
-def no_revocation_store():
-    """Bearer checks look up revoked token IDs in the system DB; these tests have none."""
-    from app.api.dependencies import get_revocation_check
+def no_token_store():
+    """Bearer checks look up the user's token version and revoked IDs in the system DB; these tests have none."""
+    from app.api.dependencies import get_token_validator
 
-    app.dependency_overrides[get_revocation_check] = lambda: never_revoked
+    app.dependency_overrides[get_token_validator] = lambda: always_valid
     yield
-    app.dependency_overrides.pop(get_revocation_check, None)
+    app.dependency_overrides.pop(get_token_validator, None)
 
 
 ZERO_UUID = "00000000-0000-0000-0000-000000000000"
@@ -69,6 +69,7 @@ def test_only_versioned_paths_are_documented():
     assert paths == {
         "/api/v1/auth",
         "/api/v1/auth/logout",
+        "/api/v1/auth/logout-all",
         "/api/v1/db/metadata",
         "/api/v1/metadata",
         "/api/v1/metadata/{metadata_id}",
@@ -163,7 +164,7 @@ def test_repeated_wrong_passwords_get_429_with_retry_after(monkeypatch):
         yield None
 
     async def wrong_password(session, username, password):
-        return False
+        return None
 
     monkeypatch.setattr(auth_service, "authenticate", wrong_password)
     limiter = LoginAttemptLimiter(max_per_user=2, max_per_ip=10, window_seconds=60)
@@ -185,12 +186,12 @@ def test_repeated_wrong_passwords_get_429_with_retry_after(monkeypatch):
 
 
 def test_revoked_token_is_rejected():
-    from app.api.dependencies import get_revocation_check
+    from app.api.dependencies import get_token_validator
 
-    async def always_revoked(jti: str) -> bool:
-        return True
+    async def never_valid(claims) -> bool:
+        return False
 
-    app.dependency_overrides[get_revocation_check] = lambda: always_revoked
+    app.dependency_overrides[get_token_validator] = lambda: never_valid
     response = client.get("/api/v1/metadata", headers=auth_header())
     assert response.status_code == 401
     assert response.json() == {"detail": "Invalid or expired token"}
@@ -234,3 +235,7 @@ def test_readiness_reports_the_system_db():
     assert unavailable.status_code == 503
     assert unavailable.json() == {"status": "unavailable", "checks": {"system_db": "unavailable"}}
     assert "10.0.0.5" not in unavailable.text
+
+
+def test_logout_all_needs_credentials():
+    assert client.post("/api/v1/auth/logout-all").status_code == 401
