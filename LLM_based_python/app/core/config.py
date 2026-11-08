@@ -1,13 +1,14 @@
 import base64
 import binascii
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
-from app.domain.enums import MaskingMode
+from app.domain.enums import MaskingMode, SslMode
 
 # The development-only secrets shipped in .env.example. They let `cp .env.example .env` start the
 # stack as is, and are rejected when APP_ENV=production.
@@ -69,6 +70,10 @@ class Settings(BaseSettings):
     # ones (system DB, loopback, link-local/cloud metadata, multicast, unspecified, reserved).
     # A listed loopback address or hostname is allowed; the system DB never is.
     target_db_allowed_hosts: str = ""
+    # TLS to target databases. verify-ca / verify-full check the certificate against
+    # TARGET_DB_SSL_ROOT_CERT (a PEM CA bundle), or the system trust store when it is empty.
+    target_db_ssl_mode: SslMode = SslMode.PREFER
+    target_db_ssl_root_cert: str = ""
     max_sample_count: int = 100
     sample_masking_mode: MaskingMode = MaskingMode.PARTIAL
     # Fuse TCKN / Luhn checks on the raw samples into the LLM distribution
@@ -96,6 +101,8 @@ class Settings(BaseSettings):
             problems.append(
                 "ENCRYPTION_KEY must be base64 of exactly 32 bytes (generate one with: openssl rand -base64 32)"
             )
+        if self.target_db_ssl_root_cert and not Path(self.target_db_ssl_root_cert).is_file():
+            problems.append(f"TARGET_DB_SSL_ROOT_CERT file not found: {self.target_db_ssl_root_cert}")
         if self.app_env == "production":
             secrets = {
                 "JWT_SECRET_KEY": self.jwt_secret_key,

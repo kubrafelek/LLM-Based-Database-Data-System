@@ -9,6 +9,22 @@ from app.main import app
 
 # No context manager: the lifespan (admin user seeding) needs the system DB.
 client = TestClient(app)
+
+
+async def never_revoked(jti: str) -> bool:
+    return False
+
+
+@pytest.fixture(autouse=True)
+def no_revocation_store():
+    """Bearer checks look up revoked token IDs in the system DB; these tests have none."""
+    from app.api.dependencies import get_revocation_check
+
+    app.dependency_overrides[get_revocation_check] = lambda: never_revoked
+    yield
+    app.dependency_overrides.pop(get_revocation_check, None)
+
+
 ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 
 
@@ -52,11 +68,13 @@ def test_only_versioned_paths_are_documented():
     paths = set(app.openapi()["paths"])
     assert paths == {
         "/api/v1/auth",
+        "/api/v1/auth/logout",
         "/api/v1/db/metadata",
         "/api/v1/metadata",
         "/api/v1/metadata/{metadata_id}",
         "/api/v1/classify",
         "/health",
+        "/health/ready",
     }
 
 
@@ -164,3 +182,55 @@ def test_repeated_wrong_passwords_get_429_with_retry_after(monkeypatch):
     assert blocked.json() == {"detail": "Too many failed login attempts. Try again later."}
     assert 1 <= int(blocked.headers["retry-after"]) <= 60
     assert basic.status_code == 429
+
+
+def test_revoked_token_is_rejected():
+    from app.api.dependencies import get_revocation_check
+
+    async def always_revoked(jti: str) -> bool:
+        return True
+
+    app.dependency_overrides[get_revocation_check] = lambda: always_revoked
+    response = client.get("/api/v1/metadata", headers=auth_header())
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or expired token"}
+
+
+def test_logout_needs_a_bearer_token():
+    assert client.post("/api/v1/auth/logout").status_code == 401
+    assert client.post("/api/v1/auth/logout", headers={"Authorization": "Bearer not-a-jwt"}).status_code == 401
+    basic = client.post("/api/v1/auth/logout", auth=("admin", "secret"))
+    assert basic.status_code == 400
+    assert basic.json() == {"detail": "Only Bearer tokens can be revoked; Basic credentials have no session"}
+
+
+class FakeSession:
+    def __init__(self, error: Exception | None = None):
+        self.error = error
+
+    async def execute(self, statement):
+        if self.error:
+            raise self.error
+
+
+def test_readiness_reports_the_system_db():
+    from app.api.dependencies import get_session
+
+    async def healthy():
+        yield FakeSession()
+
+    async def down():
+        yield FakeSession(ConnectionRefusedError("connect call failed 10.0.0.5:5432"))
+
+    try:
+        app.dependency_overrides[get_session] = healthy
+        ok = client.get("/health/ready")
+        app.dependency_overrides[get_session] = down
+        unavailable = client.get("/health/ready")
+    finally:
+        app.dependency_overrides.pop(get_session, None)
+    assert ok.status_code == 200
+    assert ok.json() == {"status": "ok", "checks": {"system_db": "ok"}}
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {"status": "unavailable", "checks": {"system_db": "unavailable"}}
+    assert "10.0.0.5" not in unavailable.text

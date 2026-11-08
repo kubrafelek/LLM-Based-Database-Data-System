@@ -23,6 +23,15 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, server_default=func.now())
 
 
+class RevokedToken(Base):
+    """A JWT revoked by POST /auth/logout, kept until it would have expired anyway."""
+
+    __tablename__ = "revoked_tokens"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class DbConnection(Base):
     """A target database. The password is stored encrypted; one row per host/port/db/user."""
 

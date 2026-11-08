@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -7,8 +8,9 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
-from app.api.dependencies import get_llm_client
+from app.api.dependencies import SessionDep, get_llm_client
 from app.api.routes import api_router, legacy_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError
@@ -103,7 +105,26 @@ app.include_router(legacy_router)
 
 @app.get("/health", tags=["health"])
 async def health() -> dict[str, str]:
+    """Liveness: the process answers. Used by the container health check."""
     return {"status": "ok"}
+
+
+READINESS_TIMEOUT_SECONDS = 3.0
+
+
+@app.get(
+    "/health/ready",
+    tags=["health"],
+    responses={503: {"description": "A dependency is unavailable"}},
+)
+async def ready(session: SessionDep) -> JSONResponse:
+    """Readiness: the system database answers. The LLM is not called (it costs money and time)."""
+    try:
+        await asyncio.wait_for(session.execute(text("SELECT 1")), READINESS_TIMEOUT_SECONDS)
+    except Exception as exc:  # any failure means "not ready"; the reason stays in the log
+        logger.warning("Readiness check failed: system DB %s", exc.__class__.__name__)
+        return JSONResponse(status_code=503, content={"status": "unavailable", "checks": {"system_db": "unavailable"}})
+    return JSONResponse(content={"status": "ok", "checks": {"system_db": "ok"}})
 
 
 # Browser UI over the same /api/v1 endpoints (same origin, so no CORS needed).

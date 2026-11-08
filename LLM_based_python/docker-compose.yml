@@ -35,6 +35,15 @@ services:
   # Target database to scan, seeded with the case study demo script on first start.
   demo-db:
     image: postgres:16-alpine
+    # TLS with the development certificate (db/certs; the key must belong to postgres, mode 600).
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        install -o postgres -g postgres -m 600 /certs/server.key /var/lib/postgresql/server.key &&
+        install -o postgres -g postgres -m 644 /certs/server.crt /var/lib/postgresql/server.crt &&
+        exec docker-entrypoint.sh postgres -c ssl=on
+        -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
     environment:
       POSTGRES_DB: ${DEMO_DB_NAME}
       POSTGRES_USER: ${DEMO_DB_USER}
@@ -47,6 +56,7 @@ services:
     volumes:
       - ./db/demo:/docker-entrypoint-initdb.d:ro
       - demo-db-data:/var/lib/postgresql/data
+      - ./db/certs:/certs:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${DEMO_DB_USER} -d ${DEMO_DB_NAME}"]
       interval: 5s
@@ -85,6 +95,15 @@ services:
   test-target-db:
     profiles: [test]
     image: postgres:16-alpine
+    # TLS with the development certificate (db/certs; the key must belong to postgres, mode 600).
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        install -o postgres -g postgres -m 600 /certs/server.key /var/lib/postgresql/server.key &&
+        install -o postgres -g postgres -m 644 /certs/server.crt /var/lib/postgresql/server.crt &&
+        exec docker-entrypoint.sh postgres -c ssl=on
+        -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key
     environment:
       POSTGRES_DB: test_target
       POSTGRES_USER: test
@@ -93,6 +112,7 @@ services:
       DEMO_DB_READONLY_PASSWORD: reader
     volumes:
       - ./db/demo:/docker-entrypoint-initdb.d:ro
+      - ./db/certs:/certs:ro
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
@@ -118,6 +138,9 @@ services:
       TEST_TARGET_DB_PASSWORD: test
       TEST_TARGET_DB_READONLY_USER: reader
       TEST_TARGET_DB_READONLY_PASSWORD: reader
+      TEST_TLS_CA_CERT: /certs/ca.crt
+    volumes:
+      - ./db/certs:/certs:ro
     depends_on:
       test-system-db:
         condition: service_healthy

@@ -168,6 +168,13 @@ function showApp() {
 }
 
 function signOut() {
+  // Revoke the token on the server too; the UI signs out even if that call fails.
+  if (state.token) {
+    fetch(API + "/auth/logout", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${state.token}` },
+    }).catch(() => {});
+  }
   state.token = null;
   state.user = null;
   state.snapshotId = null;

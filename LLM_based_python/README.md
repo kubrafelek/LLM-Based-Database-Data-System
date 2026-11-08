@@ -52,7 +52,7 @@ curl http://localhost:8000/health        # {"status":"ok"}
 
 This starts three containers: `app` (port `8000`), `system-db`, and `demo-db` (host port `5433`). On every start:
 
-- the app runs `alembic upgrade head` (migrations `0001`–`0003`) and creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`;
+- the app runs `alembic upgrade head` (migrations `0001`–`0004`) and creates the admin user from `AUTH_USERNAME` / `AUTH_PASSWORD`;
 - `demo-db` runs the scripts in [db/demo/](db/demo/) only when its volume is empty (demo data plus the SELECT-only login `discovery_reader`).
 
 | URL | What |
@@ -101,7 +101,9 @@ Base URL: `http://localhost:8000/api/v1`. The examples use the default credentia
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Liveness check (no auth) |
+| `GET` | `/health/ready` | Readiness: `200` when the system DB answers, `503` otherwise (no auth) |
 | `POST` | `/api/v1/auth` | Get a JWT |
+| `POST` | `/api/v1/auth/logout` | Revoke the Bearer token sent with the request |
 | `POST` | `/api/v1/db/metadata` | Connect to a database and store its metadata |
 | `GET` | `/api/v1/metadata` | List metadata snapshots |
 | `GET` | `/api/v1/metadata/{metadata_id}` | Tables and columns of a snapshot |
@@ -158,7 +160,32 @@ curl -s -X POST $API/auth
 # {"detail":"Provide credentials as a JSON body or with HTTP Basic authentication"}
 ```
 
+**Too many wrong passwords → `429`**: after 5 wrong passwords for one user (or 20 in total) from one address within 5 minutes, `/auth` and Basic credentials answer `429` with a `Retry-After` header until the window passes.
+
 Every other `/api/v1` endpoint needs `Authorization: Bearer $TOKEN`. HTTP Basic (`-u admin:change-me-admin`) is accepted there as well.
+
+### `POST /auth/logout`
+
+Revokes the Bearer token sent with the request (stored by its `jti` until it would expire). Other tokens stay valid. The web UI calls it on "Sign out".
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST $API/auth/logout -H "Authorization: Bearer $TOKEN"
+# 204
+curl -s $API/metadata -H "Authorization: Bearer $TOKEN"
+# {"detail":"Invalid or expired token"}
+```
+
+Basic credentials have nothing to revoke → `400`; no or invalid token → `401`.
+
+### `GET /health/ready`
+
+For orchestrators (Kubernetes readiness probe, load balancers). `/health` only says the process runs; this one runs `SELECT 1` on the system DB with a 3 s limit. The LLM is not called.
+
+```bash
+curl -s http://localhost:8000/health/ready
+# {"status":"ok","checks":{"system_db":"ok"}}
+# system DB down → 503 {"status":"unavailable","checks":{"system_db":"unavailable"}}
+```
 
 ### `POST /db/metadata`
 
@@ -543,6 +570,7 @@ All settings come from `.env`; [.env.example](.env.example) lists and explains e
 | `MAX_SAMPLE_COUNT` | `100` | Upper limit for `sample_count` |
 | `CHECKSUM_VALIDATION_ENABLED` | `true` | Fuse TCKN / Luhn / email / IP checks into the result |
 | `CLASSIFICATION_CACHE_TTL_SECONDS` | `86400` | Cache lifetime; `0` disables the cache |
+| `TARGET_DB_SSL_MODE`, `TARGET_DB_SSL_ROOT_CERT` | `prefer`, empty | TLS to target DBs: `disable`, `prefer`, `require`, `verify-ca`, `verify-full`; CA bundle for the `verify-*` modes (system trust store when empty) |
 | `TARGET_DB_ALLOWED_HOSTS` | empty | Hostnames, IPs or CIDRs targets may use; empty = any host except the denied ones (see Security) |
 | `AUTH_MAX_FAILED_ATTEMPTS`, `AUTH_MAX_FAILED_ATTEMPTS_PER_IP`, `AUTH_FAILURE_WINDOW_SECONDS` | `5`, `20`, `300` | Failed logins allowed per client IP + username and per client IP within the window; `0` disables a limit |
 
@@ -583,6 +611,8 @@ tests/                 unit, integration, e2e, contract
 - The app refuses to start with weak secrets, or with `.env.example` values when `APP_ENV=production`.
 - Masked samples still leave the system. For real personal data use a self-hosted model (Ollama profile) or a provider with suitable KVKK/GDPR terms.
 - `POST /db/metadata` connects to caller-supplied hosts, so every target host is checked first ([host_policy.py](app/infrastructure/database/host_policy.py)): the system database is never allowed; link-local (cloud metadata `169.254.169.254`), multicast, unspecified and reserved addresses are always denied; loopback only when listed in `TARGET_DB_ALLOWED_HOSTS`. All resolved addresses must pass, and the connection uses those addresses (no second DNS lookup, so DNS rebinding cannot bypass the check). Private ranges stay allowed so internal databases work; in production set `TARGET_DB_ALLOWED_HOSTS` and restrict egress as well.
+- Target DB connections use TLS when the server offers it (`TARGET_DB_SSL_MODE=prefer`, unverified, like libpq). Use `verify-full` with `TARGET_DB_SSL_ROOT_CERT` in production so credentials and samples cannot be read or the server impersonated. In `verify-full` the driver connects to the host name (the certificate is checked against it), so DNS is resolved a second time; a changed answer then also needs a valid certificate. Compose runs `demo-db` with TLS and a development certificate ([db/certs](db/certs/README.md), never for real use).
+- Tokens carry a `jti`; `POST /auth/logout` stores it in `revoked_tokens` until the token's expiry, and every Bearer request checks that table. Tokens issued before this existed have no `jti`: valid until they expire, not revocable.
 - Run behind TLS in production.
 
 ## Design Decisions
@@ -608,5 +638,4 @@ The full decision log and evaluation results are in [../TASK.md](../TASK.md).
 - One bootstrap admin user, no user management endpoints.
 - The body size limit relies on `Content-Length`; a reverse proxy should enforce a hard limit.
 - Login throttling is in memory and per process (reset on restart, not shared between replicas).
-- Target DB connections do not use TLS (`sslmode`).
 - Migration `0002` is irreversible.

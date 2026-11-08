@@ -105,3 +105,26 @@ async def test_unreachable_target_returns_generic_400(api):
     )
     assert response.status_code == 400
     assert response.json()["detail"].startswith("Could not connect to the target database")
+
+
+async def test_logout_revokes_only_that_token(api):
+    settings = get_settings()
+    body = {"username": settings.auth_username, "password": settings.auth_password}
+    first = (await api.post("/api/v1/auth", json=body)).json()["access_token"]
+    second = (await api.post("/api/v1/auth", json=body)).json()["access_token"]
+
+    logout = await api.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {first}"})
+    assert logout.status_code == 204
+    assert logout.content == b""
+
+    revoked = await api.get("/api/v1/metadata", headers={"Authorization": f"Bearer {first}"})
+    assert revoked.status_code == 401
+    assert revoked.json() == {"detail": "Invalid or expired token"}
+    assert (await api.post("/auth/logout", headers={"Authorization": f"Bearer {first}"})).status_code == 401
+    assert (await api.get("/api/v1/metadata", headers={"Authorization": f"Bearer {second}"})).status_code == 200
+
+
+async def test_readiness_with_a_reachable_system_db(api):
+    response = await api.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "checks": {"system_db": "ok"}}

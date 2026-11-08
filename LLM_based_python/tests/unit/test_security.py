@@ -10,6 +10,7 @@ from app.core.security import (
     SecretCipher,
     create_access_token,
     decode_access_token,
+    decode_token,
     hash_password,
     verify_password,
 )
@@ -80,3 +81,30 @@ def test_token_signed_with_other_key_is_rejected():
     token = jwt.encode({"sub": "admin", "exp": future}, "another-secret-key-of-sufficient-length", algorithm="HS256")
     with pytest.raises(jwt.InvalidSignatureError):
         decode_access_token(token, settings)
+
+
+def test_tokens_carry_a_unique_id_and_expiry():
+    settings = get_settings()
+    first = decode_token(create_access_token("admin", settings)[0], settings)
+    second = decode_token(create_access_token("admin", settings)[0], settings)
+    assert first.subject == "admin"
+    assert first.token_id and len(first.token_id) == 32
+    assert first.token_id != second.token_id
+    assert first.expires_at > datetime.now(UTC)
+
+
+def test_token_without_id_is_still_accepted():
+    # Issued before revocation existed: valid until it expires, but cannot be revoked.
+    settings = get_settings()
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    token = jwt.encode({"sub": "admin", "exp": future}, settings.jwt_secret_key, algorithm="HS256")
+    assert decode_token(token, settings).token_id is None
+
+
+@pytest.mark.parametrize("jti", [123, "", "x" * 65])
+def test_token_with_malformed_id_is_rejected(jti):
+    settings = get_settings()
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    token = jwt.encode({"sub": "admin", "exp": future, "jti": jti}, settings.jwt_secret_key, algorithm="HS256")
+    with pytest.raises(jwt.InvalidTokenError):
+        decode_token(token, settings)

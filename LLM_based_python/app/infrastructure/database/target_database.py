@@ -1,6 +1,7 @@
 """Access to external (target) PostgreSQL databases: connecting, schema inspection, sampling."""
 
 import logging
+import ssl
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -9,6 +10,7 @@ import asyncpg
 
 from app.core.config import Settings
 from app.core.exceptions import InvalidRequestError, StaleMetadataError, TargetDatabaseError
+from app.domain.enums import SslMode
 from app.infrastructure.database.host_policy import allowed_addresses
 
 logger = logging.getLogger(__name__)
@@ -42,17 +44,36 @@ def _error_code(exc: Exception) -> str:
     return getattr(exc, "sqlstate", None) or exc.__class__.__name__
 
 
+def ssl_option(settings: Settings) -> str | ssl.SSLContext:
+    """asyncpg's ssl argument for TARGET_DB_SSL_MODE.
+
+    disable / prefer / require are passed by name (asyncpg handles them like libpq). The verifying
+    modes need an SSLContext: CA from TARGET_DB_SSL_ROOT_CERT or the system trust store, plus the
+    host name check for verify-full.
+    """
+    mode = settings.target_db_ssl_mode
+    if mode in (SslMode.DISABLE, SslMode.PREFER, SslMode.REQUIRE):
+        return mode.value
+    context = ssl.create_default_context(cafile=settings.target_db_ssl_root_cert or None)
+    context.check_hostname = mode == SslMode.VERIFY_FULL
+    return context
+
+
 @asynccontextmanager
 async def connect_target(info: ConnectionInfo, settings: Settings) -> AsyncIterator[asyncpg.Connection]:
     """Open a read-only, time-limited connection to a target database.
 
     The host must pass the target host policy (host_policy.py); TargetHostNotAllowedError otherwise.
-    The connection goes to the addresses that were checked, not to a fresh DNS lookup.
+    The connection goes to the addresses that were checked, not to a fresh DNS lookup, except with
+    TARGET_DB_SSL_MODE=verify-full: the certificate is matched against the name the driver connects
+    to, so it gets the host name (a changed DNS answer must then also present a valid certificate).
     """
     try:
         addresses = await allowed_addresses(info.host, info.port, settings)
+        verify_name = settings.target_db_ssl_mode == SslMode.VERIFY_FULL
         conn = await asyncpg.connect(
-            host=addresses,
+            host=info.host if verify_name else addresses,
+            ssl=ssl_option(settings),
             port=info.port,
             database=info.database,
             user=info.username,
@@ -64,7 +85,7 @@ async def connect_target(info: ConnectionInfo, settings: Settings) -> AsyncItera
                 "application_name": "llm-data-discovery",
             },
         )
-    except (TimeoutError, OSError, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
+    except (TimeoutError, OSError, ssl.SSLError, asyncpg.PostgresError, asyncpg.InterfaceError) as exc:
         # Driver messages can contain user names or server details; keep them out of the response.
         logger.warning("Target DB connection to %s failed: %s", info.describe(), _error_code(exc))
         raise TargetDatabaseError(CONNECT_ERROR) from exc

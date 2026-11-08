@@ -54,6 +54,35 @@ def test_auth_rejects_a_wrong_password(client, credentials):
     assert response.status_code == 401
 
 
+def test_logout_revokes_only_that_token(client, credentials):
+    username, password = credentials
+    login = {"username": username, "password": password}
+    first = client.post("/api/v1/auth", json=login).json()["access_token"]
+    second = client.post("/api/v1/auth", json=login).json()["access_token"]
+
+    response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {first}"})
+    assert response.status_code == 204
+
+    revoked = client.get("/api/v1/metadata", headers={"Authorization": f"Bearer {first}"})
+    assert revoked.status_code == 401
+    assert revoked.json() == {"detail": "Invalid or expired token"}
+    assert client.get("/api/v1/metadata", headers={"Authorization": f"Bearer {second}"}).status_code == 200
+
+
+def test_logout_needs_a_bearer_token(client, credentials):
+    assert client.post("/api/v1/auth/logout").status_code == 401
+    basic = base64.b64encode(":".join(credentials).encode()).decode()
+    response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Basic {basic}"})
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Only Bearer tokens can be revoked; Basic credentials have no session"}
+
+
+def test_readiness_checks_the_system_database(client):
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "checks": {"system_db": "ok"}}
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [

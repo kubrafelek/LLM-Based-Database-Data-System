@@ -18,6 +18,16 @@ class PiiCategory(StrEnum):
     IP_ADDRESS = "ip_address"
 
 
+class SslMode(StrEnum):
+    """TLS for target database connections (libpq sslmode names)."""
+
+    DISABLE = "disable"
+    PREFER = "prefer"  # TLS when the server offers it, unverified (the drivers' default)
+    REQUIRE = "require"  # TLS or fail, certificate not verified
+    VERIFY_CA = "verify-ca"  # TLS, certificate signed by a trusted CA
+    VERIFY_FULL = "verify-full"  # verify-ca + the certificate matches the host name
+
+
 class MaskingMode(StrEnum):
     """How sample values are masked before they are sent to the LLM."""
 
