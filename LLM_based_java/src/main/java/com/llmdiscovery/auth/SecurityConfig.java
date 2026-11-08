@@ -32,8 +32,8 @@ public class SecurityConfig {
             new AntPathRequestMatcher("/api/v1/classify"), new AntPathRequestMatcher("/classify"));
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwt, AuthService authService)
-            throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwt, AuthService authService,
+            RevokedTokenRepository revokedTokens) throws Exception {
         http.csrf(csrf -> csrf.disable()) // no cookies or sessions, so no CSRF surface
                 .cors(Customizer.withDefaults()) // uses WebConfig's CORS_ALLOWED_ORIGINS mapping
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -43,7 +43,7 @@ public class SecurityConfig {
                 .requestCache(cache -> cache.disable())
                 .authorizeHttpRequests(auth -> auth.requestMatchers(PROTECTED).authenticated().anyRequest().permitAll())
                 .exceptionHandling(e -> e.authenticationEntryPoint(entryPoint()))
-                .addFilterBefore(new TokenAuthenticationFilter(jwt, authService, PROTECTED),
+                .addFilterBefore(new TokenAuthenticationFilter(jwt, authService, PROTECTED, revokedTokens),
                         AnonymousAuthenticationFilter.class);
         return http.build();
     }

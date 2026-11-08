@@ -151,4 +151,37 @@ class ApiFlowIntegrationTest extends IntegrationTest {
         assertThat(viaBasic.status()).isEqualTo(429);
         assertThat(viaBasic.body().get("detail").asText()).isEqualTo("Too many failed login attempts. Try again later.");
     }
+
+    @Test
+    void logoutRevokesOnlyThatToken() {
+        String first = bearer();
+        String second = bearer();
+        assertThat(call("POST", "/api/v1/auth/logout", null, first).status()).isEqualTo(204);
+
+        Reply revoked = call("GET", "/api/v1/metadata", null, first);
+        assertThat(revoked.status()).isEqualTo(401);
+        assertThat(revoked.body().get("detail").asText()).isEqualTo("Invalid or expired token");
+        assertThat(call("POST", "/auth/logout", null, first).status()).isEqualTo(401);
+        assertThat(call("GET", "/api/v1/metadata", null, second).status()).isEqualTo(200);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM revoked_tokens", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void logoutNeedsABearerToken() {
+        assertThat(call("POST", "/api/v1/auth/logout", null, null).status()).isEqualTo(401);
+        assertThat(call("POST", "/api/v1/auth/logout", null, "Bearer not-a-jwt").status()).isEqualTo(401);
+        String basic = "Basic " + Base64.getEncoder().encodeToString("admin:secret".getBytes());
+        Reply viaBasic = call("POST", "/api/v1/auth/logout", null, basic);
+        assertThat(viaBasic.status()).isEqualTo(400);
+        assertThat(viaBasic.body().get("detail").asText())
+                .isEqualTo("Only Bearer tokens can be revoked; Basic credentials have no session");
+    }
+
+    @Test
+    void readinessChecksTheSystemDatabase() {
+        Reply ready = call("GET", "/health/ready", null, null);
+        assertThat(ready.status()).isEqualTo(200);
+        assertThat(ready.body().get("status").asText()).isEqualTo("ok");
+        assertThat(ready.body().get("checks").get("system_db").asText()).isEqualTo("ok");
+    }
 }

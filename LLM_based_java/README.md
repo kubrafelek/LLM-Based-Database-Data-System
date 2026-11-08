@@ -211,7 +211,9 @@ The same works for `/db/metadata`, `/metadata/{metadata_id}` and `/classify`.
 | Method | Path | Token needed |
 |---|---|---|
 | `GET` | `/health` | No |
+| `GET` | `/health/ready` | No (`503` when the system DB does not answer within 3 s) |
 | `POST` | `/api/v1/auth` | No |
+| `POST` | `/api/v1/auth/logout` | Yes (revokes that token; `204`) |
 | `POST` | `/api/v1/db/metadata` | Yes |
 | `GET` | `/api/v1/metadata` | Yes |
 | `GET` | `/api/v1/metadata/{metadata_id}` | Yes |
@@ -271,5 +273,6 @@ docker compose --profile contract run --build --rm contract-tests   # Python con
 - **Project layout:** `src/main/java/com/llmdiscovery/` is split into `auth` (login, JWT, Argon2id), `discovery` (database scanning, snapshots), `classification` (masking, LLM, checksum checks, cache) and `common` (config, errors, encryption).
 - **Database migrations:** Flyway creates the schema on startup ([V1__schema.sql](src/main/resources/db/migration/V1__schema.sql)). The admin user is created from `.env` on every startup.
 - **How classification works, design decisions, security:** see the Python README ([classification](../LLM_based_python/README.md#how-classification-works), [design decisions](../LLM_based_python/README.md#design-decisions), [security](../LLM_based_python/README.md#security-considerations)). The Java service behaves the same way.
+- **TLS, logout, readiness:** `TARGET_DB_SSL_MODE` / `TARGET_DB_SSL_ROOT_CERT`, `POST /api/v1/auth/logout` and `GET /health/ready` behave as in Python ([security](../LLM_based_python/README.md#security-considerations)). Flyway `V2` creates `revoked_tokens`; compose runs `demo-db` with a development certificate ([db/certs](db/certs/README.md)).
 - **Login throttling and target host policy:** same rules and settings as Python ([security](../LLM_based_python/README.md#security-considerations)); code in `auth/LoginAttemptLimiter.java` and `discovery/TargetHostPolicy.java`. `X-Forwarded-*` headers are trusted only from a proxy on the same host (`server.tomcat.remoteip.internal-proxies`), as with uvicorn.
 - **Differences from the Python service:** [MIGRATION_REPORT.md §8](docs/MIGRATION_REPORT.md#8-remaining-differences-accepted).

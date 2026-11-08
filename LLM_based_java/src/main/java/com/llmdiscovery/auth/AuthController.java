@@ -8,7 +8,9 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.util.Optional;
+import io.jsonwebtoken.JwtException;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -26,10 +28,12 @@ public class AuthController {
 
     private final AuthService authService;
     private final JwtService jwt;
+    private final RevokedTokenRepository revokedTokens;
 
-    public AuthController(AuthService authService, JwtService jwt) {
+    public AuthController(AuthService authService, JwtService jwt, RevokedTokenRepository revokedTokens) {
         this.authService = authService;
         this.jwt = jwt;
+        this.revokedTokens = revokedTokens;
     }
 
     /** /auth is the case study PDF path; /api/v1/auth the documented one. */
@@ -58,5 +62,33 @@ public class AuthController {
         }
         JwtService.Token token = jwt.create(username);
         return new TokenResponse(token.value(), "bearer", token.expiresIn());
+    }
+
+    /** Revoke the Bearer token sent with this request; it is rejected from now on. */
+    @Operation(summary = "Revoke the Bearer token sent with this request")
+    @PostMapping({"/api/v1/auth/logout", "/auth/logout"})
+    public ResponseEntity<Void> revokeToken(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+        String header = authorization == null ? "" : authorization;
+        if (!header.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            if (BasicCredentials.parse(header).isPresent()) {
+                throw new AppException.BadRequest("Only Bearer tokens can be revoked; Basic credentials have no session");
+            }
+            throw new AppException.Unauthorized("Not authenticated", "Bearer");
+        }
+        JwtService.TokenClaims claims;
+        try {
+            claims = jwt.decodeClaims(header.substring(7).strip());
+        } catch (JwtException | IllegalArgumentException e) {
+            throw new AppException.Unauthorized("Invalid or expired token", "Bearer");
+        }
+        if (claims.tokenId() == null) {
+            throw new AppException.BadRequest("This token has no ID and cannot be revoked");
+        }
+        if (revokedTokens.isRevoked(claims.tokenId())) {
+            throw new AppException.Unauthorized("Invalid or expired token", "Bearer");
+        }
+        revokedTokens.revoke(claims.tokenId(), claims.expiresAt());
+        return ResponseEntity.noContent().build();
     }
 }

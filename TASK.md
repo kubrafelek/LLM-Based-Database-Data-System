@@ -15,14 +15,14 @@ Legend: ✅ Done · 🟡 Partial (deviates from spec) · ⬜ Not started
 |---|---|---|---|
 | 1 | Architecture | ✅ | Spec §10 layers |
 | 2 | Environment setup | ✅ | Docker, compose, `.env.example`, `.gitignore` |
-| 3 | Schema | ✅ | `users`; connections 1─N metadata 1─N tables 1─N columns 1─N `classification_results`; migrations `0001`–`0003` |
-| 4 | Authentication | ✅ | JSON or Basic → JWT; Argon2id; admin seeded from `.env` |
+| 3 | Schema | ✅ | `users`, `revoked_tokens`; connections 1─N metadata 1─N tables 1─N columns 1─N `classification_results`; migrations `0001`–`0004` (Java Flyway V1–V2) |
+| 4 | Authentication | ✅ | JSON or Basic → JWT (`jti`); Argon2id; admin seeded from `.env`; logout revokes a token (D26) |
 | 5 | Metadata extraction | ✅ | `pg_catalog`, optional schema filter, generic errors |
 | 6 | Metadata CRUD | ✅ | `/api/v1` + PDF aliases; pagination |
 | 7 | LLM classification | ✅ | Masking, 12 keys + `pii_likelihood`, validation, retries, deterministic checks, cache |
-| 8 | Security | ✅ | All spec §9 controls; SELECT-only target login (D16); login throttling (D21), target host policy (D22) in both services |
-| 9 | Testing | ✅ | Python 235 (97% cov), Java 202, contract 37 on both; CI (ruff, mypy, tests) |
-| 10 | Docker & docs | ✅ | Compose, README, web UI at `/ui/` |
+| 8 | Security | ✅ | All spec §9 controls; SELECT-only target login (D16); login throttling (D21), target host policy (D22), target TLS modes (D24) in both services |
+| 9 | Testing | ✅ | Python 262 (97% cov), Java 215, contract 40 on both; CI (ruff, mypy, tests) |
+| 10 | Docker & docs | ✅ | Compose (demo/test DBs with dev TLS cert), README, web UI at `/ui/`, readiness `/health/ready` (D25) |
 | 11 | Java migration | ✅ | Spring Boot / Java 21; golden 102/102 (D18, D19) |
 
 ---
@@ -91,6 +91,9 @@ All met: FastAPI + PostgreSQL + OpenAI-compatible LLM + Docker; Basic auth with 
 | D20 | Secrets | Dev-only keys in `.env.example`; startup validation rejects them in production. Connection deleted with its last snapshot |
 | D21 | Login throttling | Failed logins (`/auth` and Basic) counted in a sliding window per client IP + username (5) and per IP (20) over 300 s; over the limit → `429` + `Retry-After`, checked before Argon2. Not keyed on username alone, so others cannot lock the admin out. In memory, per process (documented); key count bounded |
 | D22 | Target host policy | Checked in `connect_target` / Java `TargetDatabase.connect` (covers extraction and classify): system DB never; link-local/metadata, multicast, unspecified, reserved always denied; loopback only if listed; optional allow list `TARGET_DB_ALLOWED_HOSTS` (hostnames, IPs, CIDRs). Every resolved address must pass and asyncpg connects to those addresses (no DNS rebinding). Private ranges allowed by default (demo-db, internal DBs). Denied → `400` |
+| D24 | Target TLS | `TARGET_DB_SSL_MODE` (libpq names, default `prefer` = previous driver default) + `TARGET_DB_SSL_ROOT_CERT` (else system/JVM trust store). `verify-full` connects by host name so the certificate can be matched (second DNS lookup, mitigated by the certificate). Dev CA + server cert in `db/certs` (script `scripts/generate_dev_certs.py`), used by compose `demo-db` / `test-target-db` |
+| D25 | Readiness | `GET /health/ready`: `SELECT 1` on the system DB, 3 s limit → 200 / 503 with `checks.system_db`; no LLM call. `/health` stays liveness for the container check. Java runs the check on one background thread (Hikari waits 30 s) |
+| D26 | Token revocation | Random `jti` per token; `POST /auth/logout` (Bearer only; Basic → 400) stores it in `revoked_tokens` until expiry (expired rows purged on insert); Bearer requests check it. Tokens without `jti` valid until expiry. Table created `IF NOT EXISTS` by Alembic `0004` and Flyway `V2` |
 | D23 | Forwarded headers (Java) | `forward-headers-strategy: native`, Tomcat `internal-proxies` = loopback only, matching uvicorn; `framework` trusted `X-Forwarded-For` from anyone and would bypass D21 |
 
 ---
@@ -98,7 +101,8 @@ All met: FastAPI + PostgreSQL + OpenAI-compatible LLM + Docker; Basic auth with 
 ## 5. Next Steps
 
 - Optional: batch / whole-table classification endpoint (fewer LLM calls, shared context).
-- Remaining review items: TLS (`sslmode`) for target connections, readiness check, token revocation. D21/D22 are not in the contract suite (a lockout test would block later tests; the host check needs a system-DB target).
+- D21/D22 are not in the contract suite (a lockout test would block later tests; the host check needs a system-DB target). TLS is covered by integration tests only (contract runs against `demo-db` with `prefer`).
+- Open from the gap review: token revocation is per token (no "revoke all" on password change); metrics / request IDs / JSON logs; migrations run on every container start.
 
 ### 5a. External Checklist Review
 
@@ -112,53 +116,56 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - Contract: `docker compose --profile contract run --rm contract-tests` (real deployment + LLM).
 - Java: `docker compose --profile test run --build --rm tests mvn -B test` in `LLM_based_java/`.
 
-**Totals (measured 2026-11-08):** Python 235 (unit 202, integration 28, e2e 5; 97% cov) · contract 37 · Java 202 (unit 172, integration 30). Counts include parametrized cases.
+**Totals (measured 2026-11-08):** Python 262 (unit 218, integration 37, e2e 7; 97% cov) · contract 40 · Java 215 (unit 175, integration 40). Counts include parametrized cases.
 
-### Python unit (202)
+### Python unit (218)
 
 | File | # | Covers |
 |---|---|---|
-| `test_api.py` | 24 | Auth required, 401/422/413, 429 + Retry-After (JSON and Basic), OpenAPI paths, aliases, CORS, UI + CSP, generic JSON 500 |
+| `test_api.py` | 27 | Auth required, 401/422/413, 429 + Retry-After (JSON and Basic), revoked token 401, logout 401/400, readiness 200/503 without leaking the error, OpenAPI paths, aliases, CORS, UI + CSP, generic JSON 500 |
 | `test_checksum_evidence.py` | 55 | TCKN, Luhn, email, IP checks; evidence tiers; fusion cases |
 | `test_classification_cache.py` | 10 | Key stability and invalidation; keyed fingerprint |
 | `test_classification_parser.py` | 18 | Normalization, rejection, all-zero handling |
-| `test_config.py` | 14 | Startup validation: clear messages, all errors at once, example secrets OK in dev, rejected in production |
+| `test_config.py` | 16 | Startup validation (incl. SSL mode, missing CA file): clear messages, all errors at once, example secrets OK in dev, rejected in production |
 | `test_llm_client.py` | 16 | Request shape, retries, quota fail-fast, parse re-request |
 | `test_prompts.py` | 5 | Categories, sample delimiting, masking note, prompt injection stays in the data block |
 | `test_sample_sanitizer.py` | 13 | none / partial / strict masking |
-| `test_security.py` | 10 | AES-GCM, JWT, Argon2id |
-| `test_target_database.py` | 7 | Identifier quoting, sample query, `inet`, password repr |
+| `test_security.py` | 15 | AES-GCM, JWT (unique `jti`, missing / malformed `jti`), Argon2id |
+| `test_target_database.py` | 13 | Identifier quoting, sample query, `inet`, password repr, SSL option per mode |
 | `test_rate_limit.py` | 9 | Window, Retry-After, expiry, case-insensitive user, no cross-IP lockout, per-IP limit, success reset, 0 disables, bounded keys |
 | `test_host_policy.py` | 21 | System DB (name, alias, IP, even if listed), metadata/link-local/multicast/unspecified/reserved/IPv4-mapped, mixed DNS answers, loopback, allow list, unknown host |
 
-### Python integration (28) and e2e (5)
+### Python integration (37) and e2e (7)
 
 | File | # | Covers |
 |---|---|---|
 | `test_auth_service.py` | 4 | Login, admin seeding |
 | `test_metadata_service.py` | 6 | Extraction, encryption, CRUD, schema filter, generic errors |
 | `test_target_access.py` | 4 | Read-only session and SELECT-only role; system DB refused as a target |
+| `test_token_revocation.py` | 2 | Revoke idempotent, expired rows purged |
+| `test_target_tls.py` | 7 | prefer/require encrypted, disable plain, verify-full OK and wrong-name rejected, verify-ca by IP, untrusted CA rejected |
 | `test_classification_flow.py` | 14 | Masked prompts, evidence, limits, empty column, cache behavior |
-| `test_full_flow.py` | 5 | Full HTTP flow, Basic auth, aliases, unreachable target (fresh login limiter per test) |
+| `test_full_flow.py` | 7 | Full HTTP flow, Basic auth, aliases, unreachable target (fresh login limiter per test), logout revokes only that token, readiness |
 
-### Contract (37)
+### Contract (40)
 
-`tests/contract/test_api_contract.py`: auth, extraction, list/detail, classify (shape, validation, TCKN/email/IP evidence, cache), delete semantics. Passes against both services.
+`tests/contract/test_api_contract.py`: auth, logout, readiness, extraction, list/detail, classify (shape, validation, TCKN/email/IP evidence, cache), delete semantics. Passes against both services.
 
-### Java unit (172) and integration (30)
+### Java unit (175) and integration (40)
 
 | File | # | Covers |
 |---|---|---|
 | `GoldenTest` | 102 | Python-generated outputs: masking, checks, evidence, fusion, parsing, prompts, crypto interop |
 | `LlmClientTest` | 15 | Same cases as Python |
 | `ClassificationServiceTest` | 7 | Mockito: cache miss/hit, `force_refresh`, TTL 0, limits before DB access, unknown column, evidence over a "no category" reply |
-| `SecurityTest` / `TargetDatabaseTest` | 7 / 7 | Crypto; identifiers and sampling |
+| `SecurityTest` / `TargetDatabaseTest` | 10 / 7 | Crypto, JWT `jti` (hand-signed tokens for raw types); identifiers and sampling |
 | `LoginAttemptLimiterTest` / `TargetHostPolicyTest` | 9 / 22 | Same cases as Python (D21, D22); IPv6 bracketing for JDBC |
 | `ClassificationCacheTest` | 3 | Key behavior |
 | `MetadataIntegrationTest` | 8 | Extraction, CRUD, pagination, schema filter; last snapshot delete removes the connection |
 | `ClassificationIntegrationTest` | 13 | Classification flow and cache |
 | `TargetAccessIntegrationTest` | 3 | Read-only enforcement; system DB refused as a target |
-| `ApiFlowIntegrationTest` | 6 | Full HTTP flow; 429 + Retry-After on `/auth` and Basic |
+| `ApiFlowIntegrationTest` | 9 | Full HTTP flow; 429 + Retry-After on `/auth` and Basic; logout; readiness |
+| `TargetTlsIntegrationTest` | 7 | Same cases as Python `test_target_tls.py` |
 
 ### Evaluation (real LLM)
 
@@ -187,6 +194,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - **Step 33:** Python UI: Java design ported, plus a plain-language verdict per result (Personal data / Likely X, possibly Y / Mixed content / Not personal data), explained score labels, sample-count note, "How to read the results" panel, host hint. Verified in headless Chrome. README Known Limitations: mixed-content columns (`audit_logs.new_values`: email 0.4, names 0.2×3, stable over 3 forced runs) and sensitive data outside the 12 categories (salary, IBAN).
 - **Step 34 (D21, D22, Python):** Gap review fixes. Login throttling (`core/rate_limit.py`) on `/auth` and Basic auth; `AppError` can carry headers. Target host policy (`infrastructure/database/host_policy.py`) in `connect_target`. New settings in `.env.example`, README (config, errors `400`/`429`, security, limitations). README migration list fixed (`0001`–`0003`). Docker suite 235 passed (97% cov), contract 37/37 against the running service, ruff and mypy clean. Live check: `system-db`, `169.254.169.254`, `localhost` → 400, `demo-db` → 201; 6th wrong login → 429 with `Retry-After: 300`. Java not changed.
 - **Step 35 (D21–D23, Java + CI):** CI runs `mypy app`. Java port of the limiter (`auth/LoginAttemptLimiter`, synchronized) and host policy (`discovery/TargetHostPolicy`, JDBC gets the checked addresses); 429 written by `TokenAuthenticationFilter` for Basic; forwarded headers trusted only from loopback (D23). Java 202 passed, contract 37/37 on Java, live check same as Python (400 for system-db / metadata / localhost, 429 on 6th wrong login, spoofed `X-Forwarded-For` still 429 on both). Java README, `.env.example`, MIGRATION_REPORT §10.1 updated.
+- **Step 36 (D24–D26, both services):** Merged Steps 34–35 into `main`. Target TLS modes, `/health/ready`, token revocation with `/auth/logout` (UI "Sign out" calls it). Compose demo/test DBs run `ssl=on` with a dev certificate. Port defects found by tests: jjwt coerced a numeric/empty `jti`; Java readiness hung for 30 s on a stopped system DB (now 503 in 3.0 s). Python 262 passed (97% cov), Java 215 passed, contract 40/40 on both; live: readiness 503 with system DB stopped and 200 after restart on both, `demo-db` `SHOW ssl` = on, Alembic at `0004`.
 
 ---
 

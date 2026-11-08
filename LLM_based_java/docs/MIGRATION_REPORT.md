@@ -164,6 +164,17 @@ Login throttling and a target host policy were added to Python first (TASK.md D2
 
 Results: 202 JUnit tests, contract 37/37 against the Java service, live check identical to Python.
 
+### 10.2 TLS, logout, readiness (2026-11-08)
+
+Python first, then ported; the shared contract suite gained 3 tests (40/40 on both). Port hazards:
+
+- **jjwt coerces claims:** a numeric `jti` is read back as the string `"123"`, and the builder drops an empty `jti`; PyJWT-based Python rejects both. Caught by a hand-signed test token; Java now reads the verified payload JSON and accepts only a JSON string.
+- **pgjdbc trust store:** without `sslrootcert`, `verify-*` looks for `~/.postgresql/root.crt`; Python falls back to the system store. Java sets `DefaultJavaSSLFactory` when no CA file is configured.
+- **Readiness timeout:** Hikari waits up to 30 s for a connection, so the first version did not answer within a probe's timeout when the system DB was down (Python failed fast). The check now runs on one background thread with a 3 s limit; measured 503 in 3.0 s.
+- **Shared system DB:** `revoked_tokens` is created with `IF NOT EXISTS` by both Alembic `0004` and Flyway `V2`.
+
+Results: 215 JUnit tests (7 TLS integration tests against `ssl=on`), contract 40/40.
+
 ## 11. Parts not trusted to the AI, and time
 
 The AI wrote the code; nothing security-relevant was accepted on reading alone. Each part was checked by something independent of the generated code:

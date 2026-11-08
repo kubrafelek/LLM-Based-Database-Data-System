@@ -51,7 +51,7 @@ springdoc:
     path: /openapi.json
   swagger-ui:
     path: /docs
-  paths-to-match: /api/v1/**, /health
+  paths-to-match: /api/v1/**, /health, /health/ready
 
 app:
   env: ${APP_ENV:development}
@@ -76,6 +76,8 @@ app:
   target-db-connect-timeout-seconds: ${TARGET_DB_CONNECT_TIMEOUT_SECONDS:10}
   target-db-statement-timeout-ms: ${TARGET_DB_STATEMENT_TIMEOUT_MS:15000}
   target-db-allowed-hosts: ${TARGET_DB_ALLOWED_HOSTS:}
+  target-db-ssl-mode: ${TARGET_DB_SSL_MODE:prefer}
+  target-db-ssl-root-cert: ${TARGET_DB_SSL_ROOT_CERT:}
   system-db-host: ${SYSTEM_DB_HOST:}
   system-db-port: ${SYSTEM_DB_PORT:5432}
   max-sample-count: ${MAX_SAMPLE_COUNT:100}

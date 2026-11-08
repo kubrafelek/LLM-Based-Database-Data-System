@@ -58,8 +58,23 @@ public class TargetDatabase {
         }
         // Set field by field (not a URL string), so a database name cannot smuggle in JDBC parameters.
         PGSimpleDataSource source = new PGSimpleDataSource();
-        source.setServerNames(addresses.stream().map(TargetHostPolicy::jdbcHost).toArray(String[]::new));
-        int[] ports = new int[addresses.size()];
+        // verify-full matches the certificate against the name the driver connects to, so it gets the
+        // host name; otherwise the checked addresses (no second DNS lookup).
+        String sslMode = properties.getTargetDbSslMode();
+        String[] servers = "verify-full".equals(sslMode)
+                ? new String[] {info.host()}
+                : addresses.stream().map(TargetHostPolicy::jdbcHost).toArray(String[]::new);
+        source.setServerNames(servers);
+        source.setSslMode(sslMode);
+        if (sslMode.startsWith("verify-")) {
+            if (properties.getTargetDbSslRootCert().isBlank()) {
+                // No CA file: the JVM trust store (pgjdbc would otherwise look for ~/.postgresql/root.crt).
+                source.setSslfactory("org.postgresql.ssl.DefaultJavaSSLFactory");
+            } else {
+                source.setSslRootCert(properties.getTargetDbSslRootCert());
+            }
+        }
+        int[] ports = new int[servers.length];
         Arrays.fill(ports, info.port());
         source.setPortNumbers(ports);
         source.setDatabaseName(info.database());

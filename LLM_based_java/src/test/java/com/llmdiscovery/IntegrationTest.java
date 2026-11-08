@@ -41,7 +41,7 @@ public abstract class IntegrationTest {
 
     @BeforeEach
     void resetSystemDatabase() {
-        jdbc.execute("TRUNCATE users, classification_results, db_columns, db_tables, db_metadata, db_connections CASCADE");
+        jdbc.execute("TRUNCATE users, revoked_tokens, classification_results, db_columns, db_tables, db_metadata, db_connections CASCADE");
         authService.ensureAdminUser();
         loginLimiter.clear(); // failed logins in one test must not block another
         LLM.requests.clear();

@@ -2,6 +2,8 @@ package com.llmdiscovery.common;
 
 import com.llmdiscovery.classification.MaskingMode;
 import jakarta.annotation.PostConstruct;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -51,6 +53,10 @@ public class AppProperties implements Cloneable {
     // Comma-separated hostnames, IPs or CIDRs a target may use. Empty = any host except the denied
     // ones (system DB, loopback, link-local/cloud metadata, multicast, unspecified, reserved).
     private String targetDbAllowedHosts = "";
+    // TLS to target databases (libpq sslmode names). verify-ca / verify-full check the certificate
+    // against TARGET_DB_SSL_ROOT_CERT (PEM CA bundle), or the JVM trust store when it is empty.
+    private String targetDbSslMode = "prefer";
+    private String targetDbSslRootCert = "";
     // The system DB (also in spring.datasource.url); never allowed as a target.
     private String systemDbHost = "";
     private int systemDbPort = 5432;
@@ -66,6 +72,7 @@ public class AppProperties implements Cloneable {
     static final Set<String> EXAMPLE_SECRETS = Set.of(
             "dev-only-jwt-secret-change-me-0123456789abcdef", "ZGV2LW9ubHktZW5jcnlwdGlvbi1rZXktMzJieXRlcyE=");
     static final int MIN_JWT_SECRET_LENGTH = 32;
+    public static final List<String> SSL_MODES = List.of("disable", "prefer", "require", "verify-ca", "verify-full");
 
     /** Fail at startup with a clear message instead of failing on the first request. */
     @PostConstruct
@@ -94,6 +101,12 @@ public class AppProperties implements Cloneable {
         }
         if (authMaxFailedAttempts < 0 || authMaxFailedAttemptsPerIp < 0 || authFailureWindowSeconds < 1) {
             problems.add("AUTH_MAX_FAILED_ATTEMPTS* must be >= 0 and AUTH_FAILURE_WINDOW_SECONDS >= 1");
+        }
+        if (!SSL_MODES.contains(targetDbSslMode)) {
+            problems.add("TARGET_DB_SSL_MODE must be one of " + String.join(", ", SSL_MODES));
+        }
+        if (!targetDbSslRootCert.isBlank() && !Files.isRegularFile(Path.of(targetDbSslRootCert))) {
+            problems.add("TARGET_DB_SSL_ROOT_CERT file not found: " + targetDbSslRootCert);
         }
         if (!List.of("HS256", "HS384", "HS512").contains(jwtAlgorithm)) {
             problems.add("JWT_ALGORITHM must be HS256, HS384 or HS512");
@@ -158,6 +171,10 @@ public class AppProperties implements Cloneable {
     public void setAuthFailureWindowSeconds(int v) { this.authFailureWindowSeconds = v; }
     public String getTargetDbAllowedHosts() { return targetDbAllowedHosts; }
     public void setTargetDbAllowedHosts(String v) { this.targetDbAllowedHosts = v == null ? "" : v; }
+    public String getTargetDbSslMode() { return targetDbSslMode; }
+    public void setTargetDbSslMode(String v) { this.targetDbSslMode = v == null ? "prefer" : v; }
+    public String getTargetDbSslRootCert() { return targetDbSslRootCert; }
+    public void setTargetDbSslRootCert(String v) { this.targetDbSslRootCert = v == null ? "" : v; }
     public String getSystemDbHost() { return systemDbHost; }
     public void setSystemDbHost(String v) { this.systemDbHost = v == null ? "" : v; }
     public int getSystemDbPort() { return systemDbPort; }

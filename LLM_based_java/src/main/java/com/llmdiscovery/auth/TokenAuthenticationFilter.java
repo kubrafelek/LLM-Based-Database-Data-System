@@ -29,11 +29,14 @@ class TokenAuthenticationFilter extends OncePerRequestFilter {
     private final JwtService jwt;
     private final AuthService authService;
     private final RequestMatcher protectedPaths;
+    private final RevokedTokenRepository revokedTokens;
 
-    TokenAuthenticationFilter(JwtService jwt, AuthService authService, RequestMatcher protectedPaths) {
+    TokenAuthenticationFilter(JwtService jwt, AuthService authService, RequestMatcher protectedPaths,
+            RevokedTokenRepository revokedTokens) {
         this.jwt = jwt;
         this.authService = authService;
         this.protectedPaths = protectedPaths;
+        this.revokedTokens = revokedTokens;
     }
 
     @Override
@@ -49,7 +52,12 @@ class TokenAuthenticationFilter extends OncePerRequestFilter {
         String user = null;
         if (header.regionMatches(true, 0, "Bearer ", 0, 7)) {
             try {
-                user = jwt.decode(header.substring(7).strip());
+                JwtService.TokenClaims claims = jwt.decodeClaims(header.substring(7).strip());
+                if (claims.tokenId() != null && revokedTokens.isRevoked(claims.tokenId())) {
+                    request.setAttribute(ERROR_ATTRIBUTE, "Invalid or expired token");
+                } else {
+                    user = claims.subject();
+                }
             } catch (JwtException | IllegalArgumentException e) {
                 request.setAttribute(ERROR_ATTRIBUTE, "Invalid or expired token");
             }

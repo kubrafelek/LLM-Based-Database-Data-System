@@ -6,6 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.llmdiscovery.auth.JwtService;
 import com.llmdiscovery.auth.PasswordHasher;
 import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.Jwts;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Date;
+import javax.crypto.spec.SecretKeySpec;
 import java.util.Base64;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -72,5 +77,51 @@ class SecurityTest {
         assertThat(hasher.verify("pw", hash)).isTrue();
         assertThat(hasher.verify("other", hash)).isFalse();
         assertThat(hasher.verify("pw", "not-a-hash")).isFalse();
+    }
+
+    private static final String JWT_SECRET = "test-jwt-secret-with-enough-length-1234";
+
+    private static String signed(Object jti) {
+        var builder = Jwts.builder().subject("admin").expiration(Date.from(Instant.now().plusSeconds(300)));
+        if (jti != null) {
+            builder.claim("jti", jti);
+        }
+        return builder.signWith(new SecretKeySpec(JWT_SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"),
+                Jwts.SIG.HS256).compact();
+    }
+
+    /** A token with exactly this JSON payload (jjwt's builder would coerce a numeric jti to a string). */
+    private static String rawSigned(String payloadJson) throws Exception {
+        Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
+        String input = b64.encodeToString("{\"alg\":\"HS256\"}".getBytes(StandardCharsets.UTF_8)) + "."
+                + b64.encodeToString(payloadJson.getBytes(StandardCharsets.UTF_8));
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(JWT_SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        return input + "." + b64.encodeToString(mac.doFinal(input.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void tokensCarryAUniqueIdAndExpiry() {
+        JwtService service = jwt(JWT_SECRET, 60);
+        JwtService.TokenClaims first = service.decodeClaims(service.create("admin").value());
+        JwtService.TokenClaims second = service.decodeClaims(service.create("admin").value());
+        assertThat(first.subject()).isEqualTo("admin");
+        assertThat(first.tokenId()).hasSize(32).isNotEqualTo(second.tokenId());
+        assertThat(first.expiresAt()).isAfter(Instant.now());
+    }
+
+    @Test
+    void tokenWithoutIdIsStillAccepted() {
+        assertThat(jwt(JWT_SECRET, 60).decodeClaims(signed(null)).tokenId()).isNull();
+    }
+
+    @Test
+    void tokenWithMalformedIdIsRejected() throws Exception {
+        JwtService service = jwt(JWT_SECRET, 60);
+        long exp = Instant.now().getEpochSecond() + 300;
+        for (String jti : new String[] {"123", "\"\"", "\"" + "x".repeat(65) + "\""}) {
+            String token = rawSigned("{\"sub\":\"admin\",\"exp\":" + exp + ",\"jti\":" + jti + "}");
+            assertThatThrownBy(() -> service.decodeClaims(token)).as(jti).isInstanceOf(JwtException.class);
+        }
     }
 }

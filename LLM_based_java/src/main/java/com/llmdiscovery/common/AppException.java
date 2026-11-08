@@ -33,6 +33,10 @@ public class AppException extends RuntimeException {
         public InvalidRequest(String detail) { super(HttpStatus.UNPROCESSABLE_ENTITY, detail); }
     }
 
+    public static class BadRequest extends AppException {
+        public BadRequest(String detail) { super(HttpStatus.BAD_REQUEST, detail); }
+    }
+
     /** User-supplied connection details could not be used. */
     public static class InvalidConnection extends AppException {
         public InvalidConnection(String detail, Throwable cause) { super(HttpStatus.BAD_REQUEST, detail, cause); }
