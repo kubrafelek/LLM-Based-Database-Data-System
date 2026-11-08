@@ -1,6 +1,6 @@
 # TASK.md: Progress Tracker
 
-Status, decisions, tests and changes. Paths are relative to [LLM_based_python/](LLM_based_python/) or [LLM_based_java/](LLM_based_java/). Requirements: [docs/SPECIFICATION.md](docs/SPECIFICATION.md) and `case_study.pdf`. Usage and API: [README.md](README.md).
+Status, decisions, tests and changes. Paths are relative to [LLM_based_python/](LLM_based_python/) or [LLM_based_java/](LLM_based_java/). Requirements: [docs/SPECIFICATION.md](docs/SPECIFICATION.md) and `case_study.pdf`. Setup: [README.md](README.md); API and usage: [docs/GUIDE.md](docs/GUIDE.md).
 
 **Last updated:** 2026-11-08 · **Phase:** both tasks complete; hardening steps 34–38 merged.
 
@@ -38,7 +38,7 @@ Spec deviations (🟡): `asyncpg` instead of `psycopg` (D4); no `APP_SECRET_KEY`
 | D12 | Email / IP format checks (weight 0.6); scores documented as uncalibrated |
 | D13 | Cache keyed on column, count, HMAC sample fingerprint, model, prompt, logic version, masking, checks; deterministic sampling; TTL; `force_refresh` |
 | D14 | HTTP-only contract suite, LLM-independent assertions |
-| D15 | Open spec questions answered in README "Design decisions" and here |
+| D15 | Open spec questions answered in docs/GUIDE.md "Design decisions" and here |
 | D16 | SELECT-only target login + read-only session |
 | D17 | Two self-contained folders, fixed compose project names |
 | D18 | Java 21, Spring Boot 3.5, Maven, JPA + Flyway, JDBC for targets, interchangeable Argon2id/JWT |
@@ -64,7 +64,7 @@ Spec deviations (🟡): `asyncpg` instead of `psycopg` (D4); no `APP_SECRET_KEY`
 
 ## 4. Tests
 
-Commands are in [README.md](README.md#running-tests). Totals (2026-11-08, parametrized cases included):
+Commands are in [docs/GUIDE.md](docs/GUIDE.md#running-tests). Totals (2026-11-08, parametrized cases included):
 
 | Suite | Count | Covers |
 |---|---|---|
@@ -85,7 +85,7 @@ Commands are in [README.md](README.md#running-tests). Totals (2026-11-08, parame
 - **Step 36:** Target TLS, readiness, single-token revocation (D24–D26). Port defects caught: jjwt coerced numeric/empty `jti`; Java readiness hung 30 s.
 - **Step 37:** Request IDs, JSON logs, metrics (D27–D29). Fixed: FastAPI nested routers dropped `/api/v1` from route labels; Spring 401s had no route.
 - **Step 38:** Revoke all tokens (D30); migrations outside the app (D31). Verified live: outdated schema refused, concurrent Alembic runs safe.
-- **Step 39:** Docs consolidated: one root README (Python and Java READMEs merged), TASK.md shortened, specification moved to `docs/SPECIFICATION.md`.
+- **Step 39:** Docs consolidated: Python and Java READMEs merged; README kept short (overview, architecture, quick start), details in `docs/GUIDE.md`; TASK.md shortened; specification moved to `docs/SPECIFICATION.md`.
 
 ## 6. Classification evaluation
 

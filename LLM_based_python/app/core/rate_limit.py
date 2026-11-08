@@ -6,7 +6,7 @@ Failures are counted in a sliding window under two keys:
 
 Keying on the IP as well as the username means a stranger cannot lock the admin out by sending
 wrong passwords from their own address. The state is in memory, so it is per process and is lost
-on restart; several workers or replicas each keep their own counts (see README "Security").
+on restart; several workers or replicas each keep their own counts (see docs/GUIDE.md "Security").
 """
 
 import math

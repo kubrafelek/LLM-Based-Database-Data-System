@@ -132,7 +132,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <!-- Integration tests need the compose test databases; see README "Running tests". -->
+                    <!-- Integration tests need the compose test databases; see docs/GUIDE.md "Running tests". -->
                     <excludedGroups>${excluded.groups}</excludedGroups>
                 </configuration>
             </plugin>

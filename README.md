@@ -60,3 +60,10 @@ docker compose exec ollama ollama pull llama3.1
 # in .env: LLM_BASE_URL=http://ollama:11434/v1  LLM_API_KEY=  LLM_MODEL=llama3.1  LLM_TIMEOUT=300
 docker compose up -d app
 ```
+
+## Documentation
+
+- [docs/GUIDE.md](docs/GUIDE.md): [API and examples](docs/GUIDE.md#api), [configuration](docs/GUIDE.md#configuration), [security](docs/GUIDE.md#security), [observability](docs/GUIDE.md#observability), [running tests](docs/GUIDE.md#running-tests), [troubleshooting](docs/GUIDE.md#troubleshooting), [known limitations](docs/GUIDE.md#known-limitations).
+- [TASK.md](TASK.md): status, decisions, test totals, change log and evaluation results.
+- [Migration report](LLM_based_java/docs/MIGRATION_REPORT.md): how the Java port was made and verified.
+- [docs/SPECIFICATION.md](docs/SPECIFICATION.md): the specification as received.
