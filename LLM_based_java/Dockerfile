@@ -30,5 +30,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=5 \
   CMD curl -fsS http://localhost:8080/health || exit 1
 
-# Flyway migrates the system DB on startup, then the admin user is seeded from .env.
+# The compose "migrate" service runs this image with MIGRATE_ONLY=true (Flyway migrates, then exits);
+# the app only checks that no migration is pending, then seeds the admin user from .env.
+# MIGRATE_ON_START=true migrates on start instead (single instance without compose).
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]

@@ -11,6 +11,7 @@ import java.util.Optional;
 import io.jsonwebtoken.JwtException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -29,11 +30,16 @@ public class AuthController {
     private final AuthService authService;
     private final JwtService jwt;
     private final RevokedTokenRepository revokedTokens;
+    private final TokenValidator tokenValidator;
+    private final UserRepository users;
 
-    public AuthController(AuthService authService, JwtService jwt, RevokedTokenRepository revokedTokens) {
+    public AuthController(AuthService authService, JwtService jwt, RevokedTokenRepository revokedTokens,
+            TokenValidator tokenValidator, UserRepository users) {
         this.authService = authService;
         this.jwt = jwt;
         this.revokedTokens = revokedTokens;
+        this.tokenValidator = tokenValidator;
+        this.users = users;
     }
 
     /** /auth is the case study PDF path; /api/v1/auth the documented one. */
@@ -57,10 +63,9 @@ public class AuthController {
             username = basic.get().username();
             password = basic.get().password();
         }
-        if (!authService.authenticateThrottled(username, password, request.getRemoteAddr())) {
-            throw new AppException.Unauthorized("Invalid credentials", "Basic");
-        }
-        JwtService.Token token = jwt.create(username);
+        User user = authService.authenticateThrottled(username, password, request.getRemoteAddr())
+                .orElseThrow(() -> new AppException.Unauthorized("Invalid credentials", "Basic"));
+        JwtService.Token token = jwt.create(username, user.getTokenVersion());
         return new TokenResponse(token.value(), "bearer", token.expiresIn());
     }
 
@@ -85,10 +90,21 @@ public class AuthController {
         if (claims.tokenId() == null) {
             throw new AppException.BadRequest("This token has no ID and cannot be revoked");
         }
-        if (revokedTokens.isRevoked(claims.tokenId())) {
+        if (!tokenValidator.isValid(claims)) {
             throw new AppException.Unauthorized("Invalid or expired token", "Bearer");
         }
         revokedTokens.revoke(claims.tokenId(), claims.expiresAt());
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Revoke every token of the calling user (Bearer token or Basic credentials, checked by
+     * TokenAuthenticationFilter). With the password it works even without a valid token.
+     */
+    @Operation(summary = "Revoke every token of the calling user")
+    @PostMapping({"/api/v1/auth/logout-all", "/auth/logout-all"})
+    public ResponseEntity<Void> revokeAllTokens(Authentication authentication) {
+        users.bumpTokenVersion(authentication.getName());
         return ResponseEntity.noContent().build();
     }
 }

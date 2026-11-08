@@ -29,11 +29,12 @@ public class SecurityConfig {
             new AntPathRequestMatcher("/api/v1/db/metadata"), new AntPathRequestMatcher("/db/metadata"),
             new AntPathRequestMatcher("/api/v1/metadata"), new AntPathRequestMatcher("/metadata"),
             new AntPathRequestMatcher("/api/v1/metadata/**"), new AntPathRequestMatcher("/metadata/**"),
-            new AntPathRequestMatcher("/api/v1/classify"), new AntPathRequestMatcher("/classify"));
+            new AntPathRequestMatcher("/api/v1/classify"), new AntPathRequestMatcher("/classify"),
+            new AntPathRequestMatcher("/api/v1/auth/logout-all"), new AntPathRequestMatcher("/auth/logout-all"));
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwt, AuthService authService,
-            RevokedTokenRepository revokedTokens) throws Exception {
+            TokenValidator tokenValidator) throws Exception {
         http.csrf(csrf -> csrf.disable()) // no cookies or sessions, so no CSRF surface
                 .cors(Customizer.withDefaults()) // uses WebConfig's CORS_ALLOWED_ORIGINS mapping
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -43,7 +44,7 @@ public class SecurityConfig {
                 .requestCache(cache -> cache.disable())
                 .authorizeHttpRequests(auth -> auth.requestMatchers(PROTECTED).authenticated().anyRequest().permitAll())
                 .exceptionHandling(e -> e.authenticationEntryPoint(entryPoint()))
-                .addFilterBefore(new TokenAuthenticationFilter(jwt, authService, PROTECTED, revokedTokens),
+                .addFilterBefore(new TokenAuthenticationFilter(jwt, authService, PROTECTED, tokenValidator),
                         AnonymousAuthenticationFilter.class);
         return http.build();
     }

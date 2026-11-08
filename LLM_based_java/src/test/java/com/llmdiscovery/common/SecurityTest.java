@@ -124,4 +124,22 @@ class SecurityTest {
             assertThatThrownBy(() -> service.decodeClaims(token)).as(jti).isInstanceOf(JwtException.class);
         }
     }
+
+    @Test
+    void tokensCarryTheTokenVersion() {
+        JwtService service = jwt(JWT_SECRET, 60);
+        assertThat(service.decodeClaims(service.create("admin", 3).value()).tokenVersion()).isEqualTo(3);
+        assertThat(service.decodeClaims(service.create("admin").value()).tokenVersion()).isZero();
+        assertThat(service.decodeClaims(signed(null)).tokenVersion()).isZero(); // no "ver": version 0
+    }
+
+    @Test
+    void tokenWithMalformedVersionIsRejected() throws Exception {
+        JwtService service = jwt(JWT_SECRET, 60);
+        long exp = Instant.now().getEpochSecond() + 300;
+        for (String ver : new String[] {"\"1\"", "-1", "1.5", "true"}) {
+            String token = rawSigned("{\"sub\":\"admin\",\"exp\":" + exp + ",\"ver\":" + ver + "}");
+            assertThatThrownBy(() -> service.decodeClaims(token)).as(ver).isInstanceOf(JwtException.class);
+        }
+    }
 }

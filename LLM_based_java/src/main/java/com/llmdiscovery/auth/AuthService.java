@@ -31,31 +31,38 @@ public class AuthService {
      * authenticate() behind the failed-login limiter: throws TooManyAttempts (429) while blocked.
      * The check runs before the password hash, so a blocked client cannot keep testing passwords.
      */
-    public boolean authenticateThrottled(String username, String password, String clientIp) {
+    public Optional<User> authenticateThrottled(String username, String password, String clientIp) {
         try {
             limiter.check(clientIp, username);
         } catch (AppException.TooManyAttempts e) {
             AppMetrics.loginThrottled().increment();
             throw e;
         }
-        if (authenticate(username, password)) {
+        Optional<User> user = authenticateUser(username, password);
+        if (user.isPresent()) {
             limiter.recordSuccess(clientIp, username);
-            return true;
+            return user;
         }
         limiter.recordFailure(clientIp, username);
         AppMetrics.loginFailures().increment();
         // No username in the log: people sometimes type their password into that field.
         log.warn("Failed login from {}", clientIp);
-        return false;
+        return Optional.empty();
     }
 
     @Transactional(readOnly = true)
     public boolean authenticate(String username, String password) {
+        return authenticateUser(username, password).isPresent();
+    }
+
+    /** The user when the password is right. */
+    @Transactional(readOnly = true)
+    public Optional<User> authenticateUser(String username, String password) {
         Optional<User> user = users.findByUsername(username);
         // Verify against a dummy hash for unknown users so timing doesn't reveal which usernames exist.
         String hash = user.map(User::getPasswordHash).orElse(hasher.dummyHash());
         boolean valid = hasher.verify(password, hash);
-        return user.isPresent() && valid;
+        return valid ? user : Optional.empty();
     }
 
     /** Create the admin user from AUTH_USERNAME/AUTH_PASSWORD, or update its password if it changed. */
@@ -67,7 +74,9 @@ public class AuthService {
             log.info("Created admin user '{}'", properties.getAuthUsername());
         } else if (!hasher.verify(properties.getAuthPassword(), existing.get().getPasswordHash())) {
             existing.get().setPasswordHash(hasher.hash(properties.getAuthPassword()));
-            log.info("Updated password of admin user '{}'", properties.getAuthUsername());
+            // A new password must also end the sessions opened with the old one.
+            existing.get().revokeAllTokens();
+            log.info("Updated password of admin user '{}' and revoked its tokens", properties.getAuthUsername());
         }
     }
 }

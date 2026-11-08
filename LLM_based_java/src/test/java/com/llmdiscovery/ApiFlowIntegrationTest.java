@@ -5,11 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.llmdiscovery.common.AppMetrics;
+import com.llmdiscovery.common.AppProperties;
 import com.llmdiscovery.discovery.MetadataDtos.DbConnectionRequest;
 import java.util.Base64;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -238,5 +240,39 @@ class ApiFlowIntegrationTest extends IntegrationTest {
         assertThat(metrics.headers().getContentType().toString()).startsWith("text/plain");
         assertThat(metrics.body()).contains("http_requests_total{method=\"GET\",route=\"/health\",status=\"200\"}")
                 .contains("http_request_duration_seconds_bucket").contains("# TYPE llm_requests_total counter");
+    }
+
+    @Autowired AppProperties appProperties;
+
+    @Test
+    void logoutAllRevokesEveryTokenOfTheUser() {
+        String first = bearer();
+        String second = bearer();
+        assertThat(call("POST", "/api/v1/auth/logout-all", null, first).status()).isEqualTo(204);
+        for (String token : new String[] {first, second}) {
+            Reply rejected = call("GET", "/api/v1/metadata", null, token);
+            assertThat(rejected.status()).isEqualTo(401);
+            assertThat(rejected.body().get("detail").asText()).isEqualTo("Invalid or expired token");
+        }
+        String third = bearer();
+        assertThat(call("GET", "/api/v1/metadata", null, third).status()).isEqualTo(200);
+        String basic = "Basic " + Base64.getEncoder().encodeToString("admin:secret".getBytes());
+        assertThat(call("POST", "/auth/logout-all", null, basic).status()).isEqualTo(204);
+        assertThat(call("GET", "/api/v1/metadata", null, third).status()).isEqualTo(401);
+        assertThat(call("POST", "/api/v1/auth/logout-all", null, null).status()).isEqualTo(401);
+    }
+
+    @Test
+    void passwordRotationRevokesExistingTokens() {
+        String token = bearer();
+        String original = appProperties.getAuthPassword();
+        try {
+            appProperties.setAuthPassword("rotated-password"); // what a restart with a new AUTH_PASSWORD does
+            authService.ensureAdminUser();
+            assertThat(call("GET", "/api/v1/metadata", null, token).status()).isEqualTo(401);
+        } finally {
+            appProperties.setAuthPassword(original);
+            authService.ensureAdminUser();
+        }
     }
 }

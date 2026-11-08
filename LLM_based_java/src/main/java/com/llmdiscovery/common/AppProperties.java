@@ -23,6 +23,8 @@ public class AppProperties implements Cloneable {
     // Application
     private String env = "development";
     private String logFormat = "text"; // text | json (applied by LogFormatSwitch)
+    private boolean migrateOnStart = false; // see MigrationConfig
+    private boolean migrateOnly = false;
     // When set, GET /metrics needs "Authorization: Bearer <METRICS_TOKEN>"; empty = open (restrict it at the proxy)
     private String metricsToken = "";
     private String corsAllowedOrigins = ""; // comma-separated; empty disables CORS
@@ -155,6 +157,10 @@ public class AppProperties implements Cloneable {
 
     public String getEnv() { return env; }
     public void setEnv(String env) { this.env = env; }
+    public boolean isMigrateOnStart() { return migrateOnStart; }
+    public void setMigrateOnStart(boolean v) { this.migrateOnStart = v; }
+    public boolean isMigrateOnly() { return migrateOnly; }
+    public void setMigrateOnly(boolean v) { this.migrateOnly = v; }
     public String getLogFormat() { return logFormat; }
     public void setLogFormat(String v) { this.logFormat = v == null ? "text" : v; }
     public String getMetricsToken() { return metricsToken; }

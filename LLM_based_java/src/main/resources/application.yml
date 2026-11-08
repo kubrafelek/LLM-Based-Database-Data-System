@@ -59,6 +59,10 @@ springdoc:
 app:
   env: ${APP_ENV:development}
   log-format: ${LOG_FORMAT:text}
+  # Flyway: false = only check that the schema is current (the compose "migrate" service migrates);
+  # true = migrate on start (single instance). MIGRATE_ONLY=true migrates and exits (the migrate service).
+  migrate-on-start: ${MIGRATE_ON_START:false}
+  migrate-only: ${MIGRATE_ONLY:false}
   metrics-token: ${METRICS_TOKEN:}
   cors-allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   max-request-body-bytes: ${MAX_REQUEST_BODY_BYTES:65536}

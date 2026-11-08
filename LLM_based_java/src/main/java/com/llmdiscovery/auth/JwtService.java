@@ -46,9 +46,14 @@ public class JwtService {
     public record Token(String value, long expiresIn) {}
 
     /** tokenId is null for tokens issued before revocation existed (valid until they expire). */
-    public record TokenClaims(String subject, String tokenId, Instant expiresAt) {}
+    public record TokenClaims(String subject, String tokenId, Instant expiresAt, int tokenVersion) {}
 
     public Token create(String subject) {
+        return create(subject, 0);
+    }
+
+    /** "ver" is the user's token_version at login; raising it (password change, logout-all) revokes the token. */
+    public Token create(String subject, int tokenVersion) {
         long expiresIn = properties.getJwtExpireMinutes() * 60L;
         Instant now = Instant.now();
         String token = Jwts.builder()
@@ -56,6 +61,7 @@ public class JwtService {
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plusSeconds(expiresIn)))
                 .id(UUID.randomUUID().toString().replace("-", ""))
+                .claim("ver", tokenVersion)
                 .signWith(key, algorithm)
                 .compact();
         return new Token(token, expiresIn);
@@ -72,30 +78,46 @@ public class JwtService {
         if (claims.getSubject() == null || claims.getExpiration() == null) {
             throw new JwtException("token must contain sub and exp");
         }
-        String jti = rawJti(token);
+        JsonNode payload = rawPayload(token);
+        String jti = rawJti(payload);
         if (jti != null && (jti.isEmpty() || jti.length() > 64)) {
             throw new JwtException("invalid jti");
         }
-        return new TokenClaims(claims.getSubject(), jti, claims.getExpiration().toInstant());
+        return new TokenClaims(claims.getSubject(), jti, claims.getExpiration().toInstant(), rawVersion(payload));
+    }
+
+    /** "ver" as a non-negative JSON integer (not 1.5, "1" or true, which PyJWT-based Python also rejects); 0 if absent. */
+    private static int rawVersion(JsonNode payload) {
+        JsonNode ver = payload.get("ver");
+        if (ver == null || ver.isNull()) {
+            return 0;
+        }
+        if (!ver.isIntegralNumber() || !ver.canConvertToInt() || ver.asInt() < 0) {
+            throw new JwtException("invalid ver");
+        }
+        return ver.asInt();
     }
 
     /**
      * The jti exactly as sent. jjwt turns a numeric jti into a string; Python's PyJWT rejects it, so read
      * the (already verified) payload JSON and accept only a JSON string.
      */
-    private static String rawJti(String token) {
+    private static JsonNode rawPayload(String token) {
         try {
-            String payload = token.split("\\.")[1];
-            JsonNode jti = MAPPER.readTree(Base64.getUrlDecoder().decode(payload)).get("jti");
-            if (jti == null || jti.isNull()) {
-                return null;
-            }
-            if (!jti.isTextual()) {
-                throw new JwtException("invalid jti");
-            }
-            return jti.asText();
+            return MAPPER.readTree(Base64.getUrlDecoder().decode(token.split("\\.")[1]));
         } catch (IOException | IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
             throw new JwtException("invalid payload", e);
         }
+    }
+
+    private static String rawJti(JsonNode payload) {
+        JsonNode jti = payload.get("jti");
+        if (jti == null || jti.isNull()) {
+            return null;
+        }
+        if (!jti.isTextual()) {
+            throw new JwtException("invalid jti");
+        }
+        return jti.asText();
     }
 }

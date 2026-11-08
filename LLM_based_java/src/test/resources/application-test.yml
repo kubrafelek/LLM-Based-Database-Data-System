@@ -1,6 +1,7 @@
 # Integration tests: the system DB comes from SYSTEM_DB_* (compose "tests" service); the rest is fixed here.
 app:
   env: test
+  migrate-on-start: true # the test system DB is empty; Flyway creates it
   auth-username: admin
   auth-password: secret
   jwt-secret-key: test-jwt-secret-with-enough-length-1234

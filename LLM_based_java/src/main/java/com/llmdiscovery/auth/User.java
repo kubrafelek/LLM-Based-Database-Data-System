@@ -22,6 +22,10 @@ public class User {
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
+    // Raised on a password change or POST /auth/logout-all; tokens with an older "ver" are rejected.
+    @Column(name = "token_version", nullable = false)
+    private int tokenVersion;
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
@@ -37,4 +41,6 @@ public class User {
     public String getUsername() { return username; }
     public String getPasswordHash() { return passwordHash; }
     public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
+    public int getTokenVersion() { return tokenVersion; }
+    public void revokeAllTokens() { this.tokenVersion++; }
 }

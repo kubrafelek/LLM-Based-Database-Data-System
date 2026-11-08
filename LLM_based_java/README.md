@@ -214,6 +214,7 @@ The same works for `/db/metadata`, `/metadata/{metadata_id}` and `/classify`.
 | `GET` | `/health/ready` | No (`503` when the system DB does not answer within 3 s) |
 | `POST` | `/api/v1/auth` | No |
 | `POST` | `/api/v1/auth/logout` | Yes (revokes that token; `204`) |
+| `POST` | `/api/v1/auth/logout-all` | Yes, token or Basic (revokes all your tokens; `204`) |
 | `GET` | `/metrics` | No, unless `METRICS_TOKEN` is set (Prometheus text) |
 | `POST` | `/api/v1/db/metadata` | Yes |
 | `GET` | `/api/v1/metadata` | Yes |
@@ -272,7 +273,7 @@ docker compose --profile contract run --build --rm contract-tests   # Python con
 ## More details
 
 - **Project layout:** `src/main/java/com/llmdiscovery/` is split into `auth` (login, JWT, Argon2id), `discovery` (database scanning, snapshots), `classification` (masking, LLM, checksum checks, cache) and `common` (config, errors, encryption).
-- **Database migrations:** Flyway creates the schema on startup ([V1__schema.sql](src/main/resources/db/migration/V1__schema.sql)). The admin user is created from `.env` on every startup.
+- **Database migrations:** the one-off compose `migrate` service runs Flyway (same image, `MIGRATE_ONLY=true`) and exits; `app` starts after it, refuses to start while a migration is pending, then creates the admin user from `.env`. Scripts: [db/migration](src/main/resources/db/migration/) (`V1`–`V3`). After an upgrade: `docker compose run --rm migrate`. `MIGRATE_ON_START=true` migrates in the app instead (single instance).
 - **How classification works, design decisions, security:** see the Python README ([classification](../LLM_based_python/README.md#how-classification-works), [design decisions](../LLM_based_python/README.md#design-decisions), [security](../LLM_based_python/README.md#security-considerations)). The Java service behaves the same way.
 - **Request ID, JSON logs, metrics:** same `X-Request-ID` rules, `LOG_FORMAT=json` fields and `/metrics` names/labels as Python ([observability](../LLM_based_python/README.md#observability)); route labels use snake_case path variables (`{metadata_id}`) like Python. Code: `common/ObservabilityFilter`, `JsonLogFormatter`, `AppMetrics` (Micrometer, one process-wide Prometheus registry).
 - **TLS, logout, readiness:** `TARGET_DB_SSL_MODE` / `TARGET_DB_SSL_ROOT_CERT`, `POST /api/v1/auth/logout` and `GET /health/ready` behave as in Python ([security](../LLM_based_python/README.md#security-considerations)). Flyway `V2` creates `revoked_tokens`; compose runs `demo-db` with a development certificate ([db/certs](db/certs/README.md)).

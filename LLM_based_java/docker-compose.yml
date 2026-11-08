@@ -10,11 +10,27 @@ services:
     ports:
       - "${APP_PORT:-8080}:8080"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       system-db:
         condition: service_healthy
       demo-db:
         condition: service_healthy
     restart: unless-stopped
+
+  # One-off: Flyway brings the system DB schema up to date, then the container exits; the app starts after it.
+  # After an upgrade without restarting everything: docker compose run --rm migrate
+  migrate:
+    build:
+      context: .
+      target: runtime
+    env_file: .env
+    environment:
+      MIGRATE_ONLY: "true"
+    depends_on:
+      system-db:
+        condition: service_healthy
+    restart: "no"
 
   # Internal database: users, extracted metadata, encrypted connection info, cached results.
   system-db:

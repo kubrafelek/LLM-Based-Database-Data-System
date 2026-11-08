@@ -29,14 +29,14 @@ class TokenAuthenticationFilter extends OncePerRequestFilter {
     private final JwtService jwt;
     private final AuthService authService;
     private final RequestMatcher protectedPaths;
-    private final RevokedTokenRepository revokedTokens;
+    private final TokenValidator tokenValidator;
 
     TokenAuthenticationFilter(JwtService jwt, AuthService authService, RequestMatcher protectedPaths,
-            RevokedTokenRepository revokedTokens) {
+            TokenValidator tokenValidator) {
         this.jwt = jwt;
         this.authService = authService;
         this.protectedPaths = protectedPaths;
-        this.revokedTokens = revokedTokens;
+        this.tokenValidator = tokenValidator;
     }
 
     @Override
@@ -53,7 +53,7 @@ class TokenAuthenticationFilter extends OncePerRequestFilter {
         if (header.regionMatches(true, 0, "Bearer ", 0, 7)) {
             try {
                 JwtService.TokenClaims claims = jwt.decodeClaims(header.substring(7).strip());
-                if (claims.tokenId() != null && revokedTokens.isRevoked(claims.tokenId())) {
+                if (!tokenValidator.isValid(claims)) {
                     request.setAttribute(ERROR_ATTRIBUTE, "Invalid or expired token");
                 } else {
                     user = claims.subject();
@@ -65,7 +65,7 @@ class TokenAuthenticationFilter extends OncePerRequestFilter {
             Optional<BasicCredentials> basic = BasicCredentials.parse(header);
             try {
                 if (basic.isPresent() && authService.authenticateThrottled(
-                        basic.get().username(), basic.get().password(), request.getRemoteAddr())) {
+                        basic.get().username(), basic.get().password(), request.getRemoteAddr()).isPresent()) {
                     user = basic.get().username();
                 }
             } catch (AppException.TooManyAttempts e) {

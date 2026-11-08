@@ -186,6 +186,14 @@ Same behavior in both services, checked by 2 new contract tests (42/42 on both) 
 
 Results: Java 225 JUnit tests, Python 282, contract 42/42 on both.
 
+### 10.4 Revoke all tokens, migrations outside the app (2026-11-08)
+
+- **Token version:** `users.token_version` (Alembic `0005` / Flyway `V3`, both `IF NOT EXISTS`) and a `ver` claim. Java reads `ver` from the verified payload JSON, like `jti`, so `"1"`, `1.5`, `true` and negative values are rejected as in Python. Password rotation and `POST /auth/logout-all` raise it; `/auth/logout-all` is in Spring Security's protected paths, so the filter authenticates it (Bearer or Basic) exactly like Python's `require_user`.
+- **Migrations:** Python runs `alembic upgrade head` in a `migrate` container and checks the revision at startup; Alembic has no lock of its own, so `env.py` takes `pg_advisory_xact_lock` (two concurrent migrators on an empty DB: one applied 5 revisions, the other none, both exit 0). Java uses a `FlywayMigrationStrategy`: migrate when `MIGRATE_ONLY` / `MIGRATE_ON_START`, otherwise fail on pending migrations; `MIGRATE_ONLY` exits through an `ApplicationRunner` that runs before the admin seeding. Flyway locks by itself.
+- Verified live on both: removing the latest migration makes the app refuse to start with the command to run; `docker compose run --rm migrate` recovers it.
+
+Results: Java 232 JUnit tests, Python 295, contract 43/43 on both.
+
 ## 11. Parts not trusted to the AI, and time
 
 The AI wrote the code; nothing security-relevant was accepted on reading alone. Each part was checked by something independent of the generated code:
