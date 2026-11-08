@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.llmdiscovery.IntegrationTest;
+import com.llmdiscovery.common.AppException;
 import com.llmdiscovery.discovery.MetadataDtos.DbConnectionRequest;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -18,6 +19,7 @@ class TargetAccessIntegrationTest extends IntegrationTest {
             "INSERT INTO customers (first_name, last_name, email) VALUES ('x', 'y', 'ro.test@example.com')";
 
     @Autowired TargetDatabase targetDatabase;
+    @Autowired MetadataService metadataService;
 
     static ConnectionInfo info(DbConnectionRequest r) {
         return new ConnectionInfo(r.host(), r.port(), r.database(), r.username(), r.password());
@@ -43,5 +45,14 @@ class TargetAccessIntegrationTest extends IntegrationTest {
             assertThatThrownBy(() -> conn.createStatement().execute("CREATE TABLE ro_probe (id int)"))
                     .isInstanceOfSatisfying(SQLException.class, e -> assertThat(e.getSQLState()).isEqualTo("42501"));
         }
+    }
+
+    @Test
+    void theSystemDatabaseCannotBeUsedAsATarget() {
+        // Valid credentials for the system DB must not let a caller read the service's own tables.
+        DbConnectionRequest system = new DbConnectionRequest(env("SYSTEM_DB_HOST"), 5432, env("SYSTEM_DB_NAME"),
+                env("SYSTEM_DB_USER"), env("SYSTEM_DB_PASSWORD"), null);
+        assertThatThrownBy(() -> metadataService.create(system))
+                .isInstanceOf(AppException.TargetHostNotAllowed.class);
     }
 }

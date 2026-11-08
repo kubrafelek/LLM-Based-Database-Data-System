@@ -246,6 +246,8 @@ Swagger UI is turned off when `APP_ENV=production`.
 | `401 Invalid or expired token` | Get a new token ([call 2](#2-log-in-and-get-a-token-no-token)). |
 | `401 Invalid credentials` on `/auth` | Check `AUTH_USERNAME` / `AUTH_PASSWORD` in `.env`, then run `docker compose up -d` again. |
 | `400` / `502` when scanning a database | Wrong host, port or credentials, or the database is unreachable from the `app` container. |
+| `400 Connections to this host are not allowed` | The target host is the system DB, a loopback / link-local / reserved address, or not in `TARGET_DB_ALLOWED_HOSTS`. List `localhost` there to scan a database on the app's own host. |
+| `429 Too many failed login attempts` | 5 wrong passwords for one user (or 20 in total) from your address within 5 minutes. Wait `Retry-After` seconds or restart the app; limits are `AUTH_MAX_FAILED_ATTEMPTS*`. |
 | `502` from `/classify` | The LLM call failed: `LLM_API_KEY` is missing or invalid, or the account has no quota. The `detail` field says which. |
 | App does not start | `docker compose logs app`. A missing or invalid setting is named in the log. |
 
@@ -269,4 +271,5 @@ docker compose --profile contract run --build --rm contract-tests   # Python con
 - **Project layout:** `src/main/java/com/llmdiscovery/` is split into `auth` (login, JWT, Argon2id), `discovery` (database scanning, snapshots), `classification` (masking, LLM, checksum checks, cache) and `common` (config, errors, encryption).
 - **Database migrations:** Flyway creates the schema on startup ([V1__schema.sql](src/main/resources/db/migration/V1__schema.sql)). The admin user is created from `.env` on every startup.
 - **How classification works, design decisions, security:** see the Python README ([classification](../LLM_based_python/README.md#how-classification-works), [design decisions](../LLM_based_python/README.md#design-decisions), [security](../LLM_based_python/README.md#security-considerations)). The Java service behaves the same way.
+- **Login throttling and target host policy:** same rules and settings as Python ([security](../LLM_based_python/README.md#security-considerations)); code in `auth/LoginAttemptLimiter.java` and `discovery/TargetHostPolicy.java`. `X-Forwarded-*` headers are trusted only from a proxy on the same host (`server.tomcat.remoteip.internal-proxies`), as with uvicorn.
 - **Differences from the Python service:** [MIGRATION_REPORT.md §8](docs/MIGRATION_REPORT.md#8-remaining-differences-accepted).

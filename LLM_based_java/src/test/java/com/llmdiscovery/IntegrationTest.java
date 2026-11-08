@@ -1,6 +1,7 @@
 package com.llmdiscovery;
 
 import com.llmdiscovery.auth.AuthService;
+import com.llmdiscovery.auth.LoginAttemptLimiter;
 import com.llmdiscovery.discovery.MetadataDtos.DbConnectionRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -30,6 +31,9 @@ public abstract class IntegrationTest {
     @Autowired
     protected AuthService authService;
 
+    @Autowired
+    protected LoginAttemptLimiter loginLimiter;
+
     @DynamicPropertySource
     static void llm(DynamicPropertyRegistry registry) {
         registry.add("app.llm-base-url", LLM::baseUrl);
@@ -39,6 +43,7 @@ public abstract class IntegrationTest {
     void resetSystemDatabase() {
         jdbc.execute("TRUNCATE users, classification_results, db_columns, db_tables, db_metadata, db_connections CASCADE");
         authService.ensureAdminUser();
+        loginLimiter.clear(); // failed logins in one test must not block another
         LLM.requests.clear();
         LLM.reply(null);
     }

@@ -20,8 +20,8 @@ Legend: ✅ Done · 🟡 Partial (deviates from spec) · ⬜ Not started
 | 5 | Metadata extraction | ✅ | `pg_catalog`, optional schema filter, generic errors |
 | 6 | Metadata CRUD | ✅ | `/api/v1` + PDF aliases; pagination |
 | 7 | LLM classification | ✅ | Masking, 12 keys + `pii_likelihood`, validation, retries, deterministic checks, cache |
-| 8 | Security | ✅ | All spec §9 controls; SELECT-only target login (D16); login throttling (D21), target host policy (D22), Python only |
-| 9 | Testing | ✅ | Python 203 (97% cov), Java 169 (90% cov), contract 37 on both; CI |
+| 8 | Security | ✅ | All spec §9 controls; SELECT-only target login (D16); login throttling (D21), target host policy (D22) in both services |
+| 9 | Testing | ✅ | Python 235 (97% cov), Java 202, contract 37 on both; CI (ruff, mypy, tests) |
 | 10 | Docker & docs | ✅ | Compose, README, web UI at `/ui/` |
 | 11 | Java migration | ✅ | Spring Boot / Java 21; golden 102/102 (D18, D19) |
 
@@ -59,7 +59,7 @@ Legend: ✅ Done · 🟡 Partial (deviates from spec) · ⬜ Not started
 | §12 | Env vars | 🟡 | No `APP_SECRET_KEY` (D7) |
 | §13 | README 1–14 | ✅ | `README.md` |
 
-### 3a. Original PDF Requirements
+### Requirements
 
 All met: FastAPI + PostgreSQL + OpenAI-compatible LLM + Docker; Basic auth with token management (`/auth`, D8); `POST /db/metadata` (UUID per column, encrypted password); `GET /metadata`, `GET /metadata/{id}`, `DELETE /metadata/{id}`; `POST /classify` (default 10 samples, 12-class distribution); config from `.env`; Task 2 Java port documented in `docs/MIGRATION_REPORT.md`.
 
@@ -90,15 +90,15 @@ All met: FastAPI + PostgreSQL + OpenAI-compatible LLM + Docker; Basic auth with 
 | D19 | Verification | Unchanged Python contract suite against Java; golden data from Python; tmpfs DBs instead of Testcontainers. Fix the port, not the spec |
 | D20 | Secrets | Dev-only keys in `.env.example`; startup validation rejects them in production. Connection deleted with its last snapshot |
 | D21 | Login throttling | Failed logins (`/auth` and Basic) counted in a sliding window per client IP + username (5) and per IP (20) over 300 s; over the limit → `429` + `Retry-After`, checked before Argon2. Not keyed on username alone, so others cannot lock the admin out. In memory, per process (documented); key count bounded |
-| D22 | Target host policy | Checked in `connect_target` (covers extraction and classify): system DB never; link-local/metadata, multicast, unspecified, reserved always denied; loopback only if listed; optional allow list `TARGET_DB_ALLOWED_HOSTS` (hostnames, IPs, CIDRs). Every resolved address must pass and asyncpg connects to those addresses (no DNS rebinding). Private ranges allowed by default (demo-db, internal DBs). Denied → `400` |
+| D22 | Target host policy | Checked in `connect_target` / Java `TargetDatabase.connect` (covers extraction and classify): system DB never; link-local/metadata, multicast, unspecified, reserved always denied; loopback only if listed; optional allow list `TARGET_DB_ALLOWED_HOSTS` (hostnames, IPs, CIDRs). Every resolved address must pass and asyncpg connects to those addresses (no DNS rebinding). Private ranges allowed by default (demo-db, internal DBs). Denied → `400` |
+| D23 | Forwarded headers (Java) | `forward-headers-strategy: native`, Tomcat `internal-proxies` = loopback only, matching uvicorn; `framework` trusted `X-Forwarded-For` from anyone and would bypass D21 |
 
 ---
 
 ## 5. Next Steps
 
 - Optional: batch / whole-table classification endpoint (fewer LLM calls, shared context).
-- Port D21 (login throttling) and D22 (target host policy) to Java. Not in the contract suite: a lockout test would block later tests, and the host check needs a system-DB target.
-- Remaining review items: TLS (`sslmode`) for target connections, mypy in CI, readiness check, token revocation.
+- Remaining review items: TLS (`sslmode`) for target connections, readiness check, token revocation. D21/D22 are not in the contract suite (a lockout test would block later tests; the host check needs a system-DB target).
 
 ### 5a. External Checklist Review
 
@@ -112,7 +112,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - Contract: `docker compose --profile contract run --rm contract-tests` (real deployment + LLM).
 - Java: `docker compose --profile test run --build --rm tests mvn -B test` in `LLM_based_java/`.
 
-**Totals (Python measured 2026-11-08, Java 2026-11-07):** Python 235 (unit 202, integration 28, e2e 5; 97% cov) · contract 37 · Java 169 (unit 141, integration 28). Counts include parametrized cases.
+**Totals (measured 2026-11-08):** Python 235 (unit 202, integration 28, e2e 5; 97% cov) · contract 37 · Java 202 (unit 172, integration 30). Counts include parametrized cases.
 
 ### Python unit (202)
 
@@ -145,7 +145,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 
 `tests/contract/test_api_contract.py`: auth, extraction, list/detail, classify (shape, validation, TCKN/email/IP evidence, cache), delete semantics. Passes against both services.
 
-### Java unit (141) and integration (28)
+### Java unit (172) and integration (30)
 
 | File | # | Covers |
 |---|---|---|
@@ -153,11 +153,12 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 | `LlmClientTest` | 15 | Same cases as Python |
 | `ClassificationServiceTest` | 7 | Mockito: cache miss/hit, `force_refresh`, TTL 0, limits before DB access, unknown column, evidence over a "no category" reply |
 | `SecurityTest` / `TargetDatabaseTest` | 7 / 7 | Crypto; identifiers and sampling |
+| `LoginAttemptLimiterTest` / `TargetHostPolicyTest` | 9 / 22 | Same cases as Python (D21, D22); IPv6 bracketing for JDBC |
 | `ClassificationCacheTest` | 3 | Key behavior |
 | `MetadataIntegrationTest` | 8 | Extraction, CRUD, pagination, schema filter; last snapshot delete removes the connection |
 | `ClassificationIntegrationTest` | 13 | Classification flow and cache |
-| `TargetAccessIntegrationTest` | 2 | Read-only enforcement |
-| `ApiFlowIntegrationTest` | 5 | Full HTTP flow |
+| `TargetAccessIntegrationTest` | 3 | Read-only enforcement; system DB refused as a target |
+| `ApiFlowIntegrationTest` | 6 | Full HTTP flow; 429 + Retry-After on `/auth` and Basic |
 
 ### Evaluation (real LLM)
 
@@ -185,6 +186,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - **Step 32:** Python README simplified: run guide first, per-endpoint curl examples with success and error cases (verified against the running service), §13 sections kept in short form. Java README anchor updated.
 - **Step 33:** Python UI: Java design ported, plus a plain-language verdict per result (Personal data / Likely X, possibly Y / Mixed content / Not personal data), explained score labels, sample-count note, "How to read the results" panel, host hint. Verified in headless Chrome. README Known Limitations: mixed-content columns (`audit_logs.new_values`: email 0.4, names 0.2×3, stable over 3 forced runs) and sensitive data outside the 12 categories (salary, IBAN).
 - **Step 34 (D21, D22, Python):** Gap review fixes. Login throttling (`core/rate_limit.py`) on `/auth` and Basic auth; `AppError` can carry headers. Target host policy (`infrastructure/database/host_policy.py`) in `connect_target`. New settings in `.env.example`, README (config, errors `400`/`429`, security, limitations). README migration list fixed (`0001`–`0003`). Docker suite 235 passed (97% cov), contract 37/37 against the running service, ruff and mypy clean. Live check: `system-db`, `169.254.169.254`, `localhost` → 400, `demo-db` → 201; 6th wrong login → 429 with `Retry-After: 300`. Java not changed.
+- **Step 35 (D21–D23, Java + CI):** CI runs `mypy app`. Java port of the limiter (`auth/LoginAttemptLimiter`, synchronized) and host policy (`discovery/TargetHostPolicy`, JDBC gets the checked addresses); 429 written by `TokenAuthenticationFilter` for Basic; forwarded headers trusted only from loopback (D23). Java 202 passed, contract 37/37 on Java, live check same as Python (400 for system-db / metadata / localhost, 429 on 6th wrong login, spoofed `X-Forwarded-For` still 429 on both). Java README, `.env.example`, MIGRATION_REPORT §10.1 updated.
 
 ---
 

@@ -129,4 +129,26 @@ class ApiFlowIntegrationTest extends IntegrationTest {
                 .getFirst("Content-Security-Policy");
         assertThat(page).contains("script-src 'self'").contains("frame-ancestors 'none'");
     }
+
+    @Test
+    void repeatedWrongPasswordsGet429WithRetryAfter() {
+        Map<String, String> wrong = Map.of("username", "admin", "password", "guess");
+        for (int i = 0; i < 5; i++) {
+            assertThat(call("POST", "/api/v1/auth", wrong, null).status()).isEqualTo(401);
+        }
+        var blocked = http.post().uri("/api/v1/auth").contentType(MediaType.APPLICATION_JSON).body(wrong)
+                .exchange((req, res) -> Map.of(
+                        "status", String.valueOf(res.getStatusCode().value()),
+                        "retry", String.valueOf(res.getHeaders().getFirst(HttpHeaders.RETRY_AFTER)),
+                        "body", new String(res.getBody().readAllBytes())));
+        assertThat(blocked.get("status")).isEqualTo("429");
+        assertThat(Integer.parseInt(blocked.get("retry"))).isBetween(1, 300);
+        assertThat(blocked.get("body")).contains("Too many failed login attempts. Try again later.");
+
+        // Basic credentials on a protected endpoint share the same limit, even the right password.
+        String basic = "Basic " + Base64.getEncoder().encodeToString("admin:secret".getBytes());
+        Reply viaBasic = call("GET", "/api/v1/metadata", null, basic);
+        assertThat(viaBasic.status()).isEqualTo(429);
+        assertThat(viaBasic.body().get("detail").asText()).isEqualTo("Too many failed login attempts. Try again later.");
+    }
 }

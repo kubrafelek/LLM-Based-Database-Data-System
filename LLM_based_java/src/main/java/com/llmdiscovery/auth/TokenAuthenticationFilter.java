@@ -1,5 +1,7 @@
 package com.llmdiscovery.auth;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.llmdiscovery.common.AppException;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -7,6 +9,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -52,8 +55,18 @@ class TokenAuthenticationFilter extends OncePerRequestFilter {
             }
         } else {
             Optional<BasicCredentials> basic = BasicCredentials.parse(header);
-            if (basic.isPresent() && authService.authenticate(basic.get().username(), basic.get().password())) {
-                user = basic.get().username();
+            try {
+                if (basic.isPresent() && authService.authenticateThrottled(
+                        basic.get().username(), basic.get().password(), request.getRemoteAddr())) {
+                    user = basic.get().username();
+                }
+            } catch (AppException.TooManyAttempts e) {
+                // Filters run before the controller advice, so write the 429 here (same body and header).
+                response.setStatus(e.status().value());
+                response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(e.retryAfterSeconds()));
+                response.setContentType("application/json");
+                new ObjectMapper().writeValue(response.getOutputStream(), Map.of("detail", e.detail()));
+                return;
             }
         }
         if (user != null) {

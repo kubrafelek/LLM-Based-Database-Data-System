@@ -37,6 +37,9 @@ public class ErrorHandler {
         if (exc instanceof AppException.Unauthorized unauthorized) {
             response.header(HttpHeaders.WWW_AUTHENTICATE, unauthorized.challenge());
         }
+        if (exc instanceof AppException.TooManyAttempts tooMany) {
+            response.header(HttpHeaders.RETRY_AFTER, String.valueOf(tooMany.retryAfterSeconds()));
+        }
         return response.body(Map.of("detail", exc.detail()));
     }
 

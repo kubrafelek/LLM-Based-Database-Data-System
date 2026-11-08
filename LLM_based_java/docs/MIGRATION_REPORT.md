@@ -152,6 +152,18 @@ A second user prompt, a QA checklist pasted verbatim (*"LLM Data Discovery – K
 - **Evaluation** with 31 columns, 3 runs each, cache bypassed: 31/31 as expected; 30/31 identical across runs.
 - **Dependency audit:** the port was generated on Spring Boot 3.3.5 (the AI's default), which is past OSS support and pulled a PostgreSQL driver with known CVEs; Bouncy Castle 1.78.1 and Guava 33.3.1 were also flagged. Upgraded to Spring Boot 3.5.16, Bouncy Castle 1.86, Guava 33.8.0, springdoc 2.8.17; all suites passed unchanged. Lesson: AI-chosen dependency versions reflect its training data, so they need an explicit audit.
 
+### 10.1 Security follow-up (2026-11-08)
+
+Login throttling and a target host policy were added to Python first (TASK.md D21, D22) and then ported with the same rules and test cases (`LoginAttemptLimiterTest` 9, `TargetHostPolicyTest` 22, plus one integration test each). Port hazards handled:
+
+- **Thread safety:** servlet requests run in parallel, unlike the single asyncio loop in Python, so the limiter's methods are `synchronized`.
+- **Filter vs. controller advice:** a 429 raised while checking Basic credentials happens in `TokenAuthenticationFilter`, before `ErrorHandler`, so the filter writes the same body and `Retry-After` itself.
+- **Forwarded headers:** `forward-headers-strategy: framework` trusted `X-Forwarded-For` from any client, which would let a client reset its per-IP count. Switched to `native` with Tomcat's `internal-proxies` limited to loopback (uvicorn's default). Verified live: a spoofed header still gets 429.
+- **"Reserved" addresses:** Java has no `is_reserved`; Python's ranges (IPv4 240/4, IPv6 list) are copied. IPv4-mapped IPv6 is already returned as `Inet4Address` by `InetAddress`.
+- **JDBC host list:** the driver gets the checked addresses (IPv6 in brackets), not the hostname, so a second DNS lookup cannot change the target.
+
+Results: 202 JUnit tests, contract 37/37 against the Java service, live check identical to Python.
+
 ## 11. Parts not trusted to the AI, and time
 
 The AI wrote the code; nothing security-relevant was accepted on reading alone. Each part was checked by something independent of the generated code:

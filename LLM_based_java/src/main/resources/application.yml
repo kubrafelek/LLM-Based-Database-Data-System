@@ -35,7 +35,12 @@ server:
   error:
     whitelabel:
       enabled: false
-  forward-headers-strategy: framework
+  # X-Forwarded-* only from a proxy on the same host (like uvicorn --proxy-headers), so a client
+  # cannot spoof its address past the login limiter.
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      internal-proxies: 127\.0\.0\.1|0:0:0:0:0:0:0:1
 
 logging:
   level:
@@ -58,6 +63,9 @@ app:
   jwt-secret-key: ${JWT_SECRET_KEY:}
   jwt-algorithm: ${JWT_ALGORITHM:HS256}
   jwt-expire-minutes: ${JWT_EXPIRE_MINUTES:60}
+  auth-max-failed-attempts: ${AUTH_MAX_FAILED_ATTEMPTS:5}
+  auth-max-failed-attempts-per-ip: ${AUTH_MAX_FAILED_ATTEMPTS_PER_IP:20}
+  auth-failure-window-seconds: ${AUTH_FAILURE_WINDOW_SECONDS:300}
   encryption-key: ${ENCRYPTION_KEY:}
   llm-base-url: ${LLM_BASE_URL:https://api.openai.com/v1}
   llm-api-key: ${LLM_API_KEY:}
@@ -67,6 +75,9 @@ app:
   llm-json-mode: ${LLM_JSON_MODE:true}
   target-db-connect-timeout-seconds: ${TARGET_DB_CONNECT_TIMEOUT_SECONDS:10}
   target-db-statement-timeout-ms: ${TARGET_DB_STATEMENT_TIMEOUT_MS:15000}
+  target-db-allowed-hosts: ${TARGET_DB_ALLOWED_HOSTS:}
+  system-db-host: ${SYSTEM_DB_HOST:}
+  system-db-port: ${SYSTEM_DB_PORT:5432}
   max-sample-count: ${MAX_SAMPLE_COUNT:100}
   sample-masking-mode: ${SAMPLE_MASKING_MODE:partial}
   checksum-validation-enabled: ${CHECKSUM_VALIDATION_ENABLED:true}

@@ -15,11 +15,30 @@ public class AuthService {
     private final UserRepository users;
     private final PasswordHasher hasher;
     private final AppProperties properties;
+    private final LoginAttemptLimiter limiter;
 
-    public AuthService(UserRepository users, PasswordHasher hasher, AppProperties properties) {
+    public AuthService(UserRepository users, PasswordHasher hasher, AppProperties properties,
+            LoginAttemptLimiter limiter) {
         this.users = users;
         this.hasher = hasher;
         this.properties = properties;
+        this.limiter = limiter;
+    }
+
+    /**
+     * authenticate() behind the failed-login limiter: throws TooManyAttempts (429) while blocked.
+     * The check runs before the password hash, so a blocked client cannot keep testing passwords.
+     */
+    public boolean authenticateThrottled(String username, String password, String clientIp) {
+        limiter.check(clientIp, username);
+        if (authenticate(username, password)) {
+            limiter.recordSuccess(clientIp, username);
+            return true;
+        }
+        limiter.recordFailure(clientIp, username);
+        // No username in the log: people sometimes type their password into that field.
+        log.warn("Failed login from {}", clientIp);
+        return false;
     }
 
     @Transactional(readOnly = true)

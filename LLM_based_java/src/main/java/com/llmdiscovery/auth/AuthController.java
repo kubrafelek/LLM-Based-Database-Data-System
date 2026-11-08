@@ -3,6 +3,7 @@ package com.llmdiscovery.auth;
 import com.llmdiscovery.common.AppException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -36,7 +37,8 @@ public class AuthController {
     @PostMapping({"/api/v1/auth", "/auth"})
     public TokenResponse issueToken(
             @Valid @RequestBody(required = false) LoginRequest body,
-            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            HttpServletRequest request) {
         String username;
         String password;
         if (body != null) {
@@ -51,7 +53,7 @@ public class AuthController {
             username = basic.get().username();
             password = basic.get().password();
         }
-        if (!authService.authenticate(username, password)) {
+        if (!authService.authenticateThrottled(username, password, request.getRemoteAddr())) {
             throw new AppException.Unauthorized("Invalid credentials", "Basic");
         }
         JwtService.Token token = jwt.create(username);

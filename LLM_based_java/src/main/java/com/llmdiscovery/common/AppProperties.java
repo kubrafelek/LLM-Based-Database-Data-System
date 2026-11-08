@@ -29,6 +29,10 @@ public class AppProperties implements Cloneable {
     private String jwtSecretKey;
     private String jwtAlgorithm = "HS256";
     private int jwtExpireMinutes = 60;
+    // Failed-login throttling (in memory, per process). 0 disables a limit.
+    private int authMaxFailedAttempts = 5; // per client IP + username
+    private int authMaxFailedAttemptsPerIp = 20; // per client IP, any username
+    private int authFailureWindowSeconds = 300;
 
     // Base64-encoded 32-byte key used to encrypt stored target DB passwords (AES-256-GCM)
     private String encryptionKey;
@@ -44,6 +48,12 @@ public class AppProperties implements Cloneable {
     // Target database access and sampling
     private double targetDbConnectTimeoutSeconds = 10.0;
     private int targetDbStatementTimeoutMs = 15000;
+    // Comma-separated hostnames, IPs or CIDRs a target may use. Empty = any host except the denied
+    // ones (system DB, loopback, link-local/cloud metadata, multicast, unspecified, reserved).
+    private String targetDbAllowedHosts = "";
+    // The system DB (also in spring.datasource.url); never allowed as a target.
+    private String systemDbHost = "";
+    private int systemDbPort = 5432;
     private int maxSampleCount = 100;
     private MaskingMode sampleMaskingMode = MaskingMode.PARTIAL;
     // Fuse TCKN / Luhn / email / IP checks on the raw samples into the LLM distribution
@@ -82,6 +92,9 @@ public class AppProperties implements Cloneable {
         if (keyBytes != 32) {
             problems.add("ENCRYPTION_KEY must be base64 of exactly 32 bytes (generate one with: openssl rand -base64 32)");
         }
+        if (authMaxFailedAttempts < 0 || authMaxFailedAttemptsPerIp < 0 || authFailureWindowSeconds < 1) {
+            problems.add("AUTH_MAX_FAILED_ATTEMPTS* must be >= 0 and AUTH_FAILURE_WINDOW_SECONDS >= 1");
+        }
         if (!List.of("HS256", "HS384", "HS512").contains(jwtAlgorithm)) {
             problems.add("JWT_ALGORITHM must be HS256, HS384 or HS512");
         }
@@ -103,6 +116,10 @@ public class AppProperties implements Cloneable {
 
     public List<String> corsOrigins() {
         return Arrays.stream(corsAllowedOrigins.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList();
+    }
+
+    public List<String> targetAllowedHosts() {
+        return Arrays.stream(targetDbAllowedHosts.split(",")).map(String::strip).filter(s -> !s.isEmpty()).toList();
     }
 
     public boolean docsEnabled() {
@@ -133,6 +150,18 @@ public class AppProperties implements Cloneable {
     public void setJwtAlgorithm(String v) { this.jwtAlgorithm = v; }
     public int getJwtExpireMinutes() { return jwtExpireMinutes; }
     public void setJwtExpireMinutes(int v) { this.jwtExpireMinutes = v; }
+    public int getAuthMaxFailedAttempts() { return authMaxFailedAttempts; }
+    public void setAuthMaxFailedAttempts(int v) { this.authMaxFailedAttempts = v; }
+    public int getAuthMaxFailedAttemptsPerIp() { return authMaxFailedAttemptsPerIp; }
+    public void setAuthMaxFailedAttemptsPerIp(int v) { this.authMaxFailedAttemptsPerIp = v; }
+    public int getAuthFailureWindowSeconds() { return authFailureWindowSeconds; }
+    public void setAuthFailureWindowSeconds(int v) { this.authFailureWindowSeconds = v; }
+    public String getTargetDbAllowedHosts() { return targetDbAllowedHosts; }
+    public void setTargetDbAllowedHosts(String v) { this.targetDbAllowedHosts = v == null ? "" : v; }
+    public String getSystemDbHost() { return systemDbHost; }
+    public void setSystemDbHost(String v) { this.systemDbHost = v == null ? "" : v; }
+    public int getSystemDbPort() { return systemDbPort; }
+    public void setSystemDbPort(int v) { this.systemDbPort = v; }
     public String getEncryptionKey() { return encryptionKey; }
     public void setEncryptionKey(String v) { this.encryptionKey = v; }
     public String getLlmBaseUrl() { return llmBaseUrl; }

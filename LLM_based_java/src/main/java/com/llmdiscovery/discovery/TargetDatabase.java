@@ -2,6 +2,8 @@ package com.llmdiscovery.discovery;
 
 import com.llmdiscovery.common.AppException;
 import com.llmdiscovery.common.AppProperties;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -9,6 +11,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,17 +37,31 @@ public class TargetDatabase {
     static final int MAX_VALUE_LENGTH = 200;
 
     private final AppProperties properties;
+    private final TargetHostPolicy hostPolicy;
 
-    public TargetDatabase(AppProperties properties) {
+    public TargetDatabase(AppProperties properties, TargetHostPolicy hostPolicy) {
         this.properties = properties;
+        this.hostPolicy = hostPolicy;
     }
 
-    /** Open a read-only, time-limited connection. The caller closes it. */
+    /**
+     * Open a read-only, time-limited connection. The caller closes it. The host must pass the target
+     * host policy (TargetHostNotAllowed otherwise); the driver connects to the checked addresses.
+     */
     public Connection connect(ConnectionInfo info) {
+        List<InetAddress> addresses;
+        try {
+            addresses = hostPolicy.allowedAddresses(info.host());
+        } catch (UnknownHostException e) {
+            log.warn("Target DB connection to {} failed: {}", info.describe(), e.getClass().getSimpleName());
+            throw new AppException.TargetDatabase(CONNECT_ERROR, e);
+        }
         // Set field by field (not a URL string), so a database name cannot smuggle in JDBC parameters.
         PGSimpleDataSource source = new PGSimpleDataSource();
-        source.setServerNames(new String[] {info.host()});
-        source.setPortNumbers(new int[] {info.port()});
+        source.setServerNames(addresses.stream().map(TargetHostPolicy::jdbcHost).toArray(String[]::new));
+        int[] ports = new int[addresses.size()];
+        Arrays.fill(ports, info.port());
+        source.setPortNumbers(ports);
         source.setDatabaseName(info.database());
         source.setUser(info.username());
         source.setPassword(info.password());
