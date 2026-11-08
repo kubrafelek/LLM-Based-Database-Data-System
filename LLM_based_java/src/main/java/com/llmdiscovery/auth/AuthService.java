@@ -1,5 +1,7 @@
 package com.llmdiscovery.auth;
 
+import com.llmdiscovery.common.AppException;
+import com.llmdiscovery.common.AppMetrics;
 import com.llmdiscovery.common.AppProperties;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -30,12 +32,18 @@ public class AuthService {
      * The check runs before the password hash, so a blocked client cannot keep testing passwords.
      */
     public boolean authenticateThrottled(String username, String password, String clientIp) {
-        limiter.check(clientIp, username);
+        try {
+            limiter.check(clientIp, username);
+        } catch (AppException.TooManyAttempts e) {
+            AppMetrics.loginThrottled().increment();
+            throw e;
+        }
         if (authenticate(username, password)) {
             limiter.recordSuccess(clientIp, username);
             return true;
         }
         limiter.recordFailure(clientIp, username);
+        AppMetrics.loginFailures().increment();
         // No username in the log: people sometimes type their password into that field.
         log.warn("Failed login from {}", clientIp);
         return false;

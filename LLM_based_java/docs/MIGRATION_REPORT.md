@@ -175,6 +175,17 @@ Python first, then ported; the shared contract suite gained 3 tests (40/40 on bo
 
 Results: 215 JUnit tests (7 TLS integration tests against `ssl=on`), contract 40/40.
 
+### 10.3 Request ID, JSON logs, metrics (2026-11-08)
+
+Same behavior in both services, checked by 2 new contract tests (42/42 on both) and by comparing live log lines. Differences handled:
+
+- **Route labels:** FastAPI 0.162 includes prefixed routers without copying routes, so the matched route's template lacked `/api/v1` (the versioned and alias paths shared a label); the prefix is now rebuilt from the path. Spring rejects unauthenticated requests in the security filter before the dispatcher, so no pattern is recorded; the filter looks the handler up afterwards, so 401s get their route as in Python. Spring's `{metadataId}` is written as `{metadata_id}`.
+- **Micrometer omits unused label combinations**, prometheus_client prints the metric's HELP/TYPE anyway. Known label values (`ok`/`error`, `hit`/`miss`, ...) are registered at 0 in both.
+- **JSON fields:** logback levels mapped to Python names (`WARN` → `WARNING`); MDC values are strings, so `status` and `duration_ms` are written as numbers explicitly. Timestamps in both: UTC, milliseconds, `+00:00`.
+- **Structured logging switch:** Spring Boot reads `logging.structured.format.console`; `LogFormatSwitch` sets it from `LOG_FORMAT` before logging starts, so startup lines are JSON too.
+
+Results: Java 225 JUnit tests, Python 282, contract 42/42 on both.
+
 ## 11. Parts not trusted to the AI, and time
 
 The AI wrote the code; nothing security-relevant was accepted on reading alone. Each part was checked by something independent of the generated code:

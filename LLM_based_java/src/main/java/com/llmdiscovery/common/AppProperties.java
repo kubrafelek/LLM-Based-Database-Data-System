@@ -22,6 +22,9 @@ public class AppProperties implements Cloneable {
 
     // Application
     private String env = "development";
+    private String logFormat = "text"; // text | json (applied by LogFormatSwitch)
+    // When set, GET /metrics needs "Authorization: Bearer <METRICS_TOKEN>"; empty = open (restrict it at the proxy)
+    private String metricsToken = "";
     private String corsAllowedOrigins = ""; // comma-separated; empty disables CORS
     private long maxRequestBodyBytes = 64 * 1024;
 
@@ -102,6 +105,9 @@ public class AppProperties implements Cloneable {
         if (authMaxFailedAttempts < 0 || authMaxFailedAttemptsPerIp < 0 || authFailureWindowSeconds < 1) {
             problems.add("AUTH_MAX_FAILED_ATTEMPTS* must be >= 0 and AUTH_FAILURE_WINDOW_SECONDS >= 1");
         }
+        if (!List.of("text", "json").contains(logFormat)) {
+            problems.add("LOG_FORMAT must be text or json");
+        }
         if (!SSL_MODES.contains(targetDbSslMode)) {
             problems.add("TARGET_DB_SSL_MODE must be one of " + String.join(", ", SSL_MODES));
         }
@@ -149,6 +155,10 @@ public class AppProperties implements Cloneable {
 
     public String getEnv() { return env; }
     public void setEnv(String env) { this.env = env; }
+    public String getLogFormat() { return logFormat; }
+    public void setLogFormat(String v) { this.logFormat = v == null ? "text" : v; }
+    public String getMetricsToken() { return metricsToken; }
+    public void setMetricsToken(String v) { this.metricsToken = v == null ? "" : v; }
     public String getCorsAllowedOrigins() { return corsAllowedOrigins; }
     public void setCorsAllowedOrigins(String v) { this.corsAllowedOrigins = v == null ? "" : v; }
     public long getMaxRequestBodyBytes() { return maxRequestBodyBytes; }

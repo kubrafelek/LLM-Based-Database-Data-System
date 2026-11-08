@@ -1,6 +1,7 @@
 package com.llmdiscovery.discovery;
 
 import com.llmdiscovery.common.AppException;
+import com.llmdiscovery.common.AppMetrics;
 import com.llmdiscovery.common.AppProperties;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -52,7 +53,11 @@ public class TargetDatabase {
         List<InetAddress> addresses;
         try {
             addresses = hostPolicy.allowedAddresses(info.host());
+        } catch (AppException.TargetHostNotAllowed e) {
+            AppMetrics.targetDbConnection("denied").increment();
+            throw e;
         } catch (UnknownHostException e) {
+            AppMetrics.targetDbConnection("error").increment();
             log.warn("Target DB connection to {} failed: {}", info.describe(), e.getClass().getSimpleName());
             throw new AppException.TargetDatabase(CONNECT_ERROR, e);
         }
@@ -86,8 +91,11 @@ public class TargetDatabase {
         source.setOptions("-c default_transaction_read_only=on -c statement_timeout="
                 + properties.getTargetDbStatementTimeoutMs());
         try {
-            return source.getConnection();
+            Connection conn = source.getConnection();
+            AppMetrics.targetDbConnection("ok").increment();
+            return conn;
         } catch (SQLException e) {
+            AppMetrics.targetDbConnection("error").increment();
             // Driver messages can contain user names or server details; keep them out of the response.
             log.warn("Target DB connection to {} failed: {}", info.describe(), errorCode(e));
             throw new AppException.TargetDatabase(CONNECT_ERROR, e);

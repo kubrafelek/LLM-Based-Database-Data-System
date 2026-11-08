@@ -7,6 +7,7 @@ import com.llmdiscovery.classification.ClassifyDtos.ChecksumEvidenceOut;
 import com.llmdiscovery.classification.ClassifyDtos.ClassifyRequest;
 import com.llmdiscovery.classification.ClassifyDtos.ClassifyResponse;
 import com.llmdiscovery.common.AppException;
+import com.llmdiscovery.common.AppMetrics;
 import com.llmdiscovery.common.AppProperties;
 import com.llmdiscovery.common.SecretCipher;
 import com.llmdiscovery.discovery.ConnectionInfo;
@@ -73,8 +74,10 @@ public class ClassificationService {
         if (ttl > 0 && !request.forceRefresh()) {
             Optional<String> hit = results.getFresh(column.getId(), key, now.minusSeconds(ttl));
             if (hit.isPresent()) {
+                AppMetrics.cacheLookup("hit").increment();
                 return fromCache(hit.get());
             }
+            AppMetrics.cacheLookup("miss").increment();
         }
 
         MaskingMode maskingMode = settings.getSampleMaskingMode();

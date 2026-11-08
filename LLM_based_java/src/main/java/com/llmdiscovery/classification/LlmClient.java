@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.llmdiscovery.common.AppException;
+import com.llmdiscovery.common.AppMetrics;
 import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpTimeoutException;
@@ -116,6 +117,19 @@ public class LlmClient {
     private record Reply(int status, String body) {}
 
     private String send(Map<String, Object> body) {
+        long start = System.nanoTime();
+        String outcome = "error";
+        try {
+            String content = sendWithRetries(body);
+            outcome = "ok";
+            return content;
+        } finally {
+            AppMetrics.llmRequest(outcome).increment();
+            AppMetrics.llmDuration(System.nanoTime() - start);
+        }
+    }
+
+    private String sendWithRetries(Map<String, Object> body) {
         String error = "LLM request failed";
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             Reply reply = null;

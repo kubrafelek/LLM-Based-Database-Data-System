@@ -1,6 +1,8 @@
 package com.llmdiscovery.common;
 
 import io.swagger.v3.oas.annotations.Hidden;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.Statement;
 import javax.sql.DataSource;
@@ -14,8 +16,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.ModelAndView;
 
@@ -26,6 +30,7 @@ public class RootController {
     static final int READINESS_TIMEOUT_SECONDS = 3;
 
     private final DataSource dataSource;
+    private final AppProperties properties;
     private final ExecutorService readinessExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "readiness-check");
         thread.setDaemon(true);
@@ -33,8 +38,9 @@ public class RootController {
     });
     private Future<Boolean> inFlight;
 
-    public RootController(DataSource dataSource) {
+    public RootController(DataSource dataSource, AppProperties properties) {
         this.dataSource = dataSource;
+        this.properties = properties;
     }
 
     /** Liveness: the process answers. Used by the container health check. */
@@ -84,6 +90,24 @@ public class RootController {
             log.warn("Readiness check failed: system DB {}", e.getClass().getSimpleName());
             return false;
         }
+    }
+
+    /** Prometheus metrics. Protected by METRICS_TOKEN when it is set. */
+    @Hidden
+    @GetMapping("/metrics")
+    public ResponseEntity<String> metrics(
+            @RequestHeader(value = "Authorization", required = false)
+            String authorization) {
+        String token = properties.getMetricsToken();
+        if (!token.isEmpty() && !MessageDigest.isEqual(
+                ("Bearer " + token).getBytes(StandardCharsets.UTF_8),
+                String.valueOf(authorization).getBytes(StandardCharsets.UTF_8))) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).header("WWW-Authenticate", "Bearer")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"detail\":\"Not authenticated\"}");
+        }
+        return ResponseEntity.ok().header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+                .body(AppMetrics.REGISTRY.scrape());
     }
 
     /** Browser UI over the same /api/v1 endpoints (same origin, so no CORS needed). */

@@ -21,8 +21,9 @@ Legend: ✅ Done · 🟡 Partial (deviates from spec) · ⬜ Not started
 | 6 | Metadata CRUD | ✅ | `/api/v1` + PDF aliases; pagination |
 | 7 | LLM classification | ✅ | Masking, 12 keys + `pii_likelihood`, validation, retries, deterministic checks, cache |
 | 8 | Security | ✅ | All spec §9 controls; SELECT-only target login (D16); login throttling (D21), target host policy (D22), target TLS modes (D24) in both services |
-| 9 | Testing | ✅ | Python 262 (97% cov), Java 215, contract 40 on both; CI (ruff, mypy, tests) |
+| 9 | Testing | ✅ | Python 282 (97% cov), Java 225, contract 42 on both; CI (ruff, mypy, tests) |
 | 10 | Docker & docs | ✅ | Compose (demo/test DBs with dev TLS cert), README, web UI at `/ui/`, readiness `/health/ready` (D25) |
+| 12 | Observability | ✅ | Request ID, JSON logs, Prometheus `/metrics` in both services (D27–D29) |
 | 11 | Java migration | ✅ | Spring Boot / Java 21; golden 102/102 (D18, D19) |
 
 ---
@@ -94,6 +95,9 @@ All met: FastAPI + PostgreSQL + OpenAI-compatible LLM + Docker; Basic auth with 
 | D24 | Target TLS | `TARGET_DB_SSL_MODE` (libpq names, default `prefer` = previous driver default) + `TARGET_DB_SSL_ROOT_CERT` (else system/JVM trust store). `verify-full` connects by host name so the certificate can be matched (second DNS lookup, mitigated by the certificate). Dev CA + server cert in `db/certs` (script `scripts/generate_dev_certs.py`), used by compose `demo-db` / `test-target-db` |
 | D25 | Readiness | `GET /health/ready`: `SELECT 1` on the system DB, 3 s limit → 200 / 503 with `checks.system_db`; no LLM call. `/health` stays liveness for the container check. Java runs the check on one background thread (Hikari waits 30 s) |
 | D26 | Token revocation | Random `jti` per token; `POST /auth/logout` (Bearer only; Basic → 400) stores it in `revoked_tokens` until expiry (expired rows purged on insert); Bearer requests check it. Tokens without `jti` valid until expiry. Table created `IF NOT EXISTS` by Alembic `0004` and Flyway `V2` |
+| D27 | Request ID | `X-Request-ID` reused when 1–128 chars of `[A-Za-z0-9._-]`, else a new 32-hex ID; on every response (incl. 401/413/500) and in every log line (contextvar / MDC). Outermost middleware (Python pure ASGI; Java filter before Spring Security) |
+| D28 | Logs | `LOG_FORMAT=text\|json`; JSON fields `timestamp` (UTC ms), `level` (Python names), `logger`, `message`, `request_id`, access fields `method`, `path` (no query), `status`, `duration_ms`, `client_ip`, `exception`. One `app.access` line per request; uvicorn access log off |
+| D29 | Metrics | Prometheus `GET /metrics` (hidden from OpenAPI), optional `METRICS_TOKEN` bearer. `http_requests_total` / `http_request_duration_seconds` by route template (`unmatched`, `/ui/*`), `llm_requests_total` + duration, `classification_cache_total`, `login_failures_total`, `login_throttled_total`, `target_db_connections_total`. Known label values at 0. Process-wide registry (prometheus_client default / static Micrometer registry) |
 | D23 | Forwarded headers (Java) | `forward-headers-strategy: native`, Tomcat `internal-proxies` = loopback only, matching uvicorn; `framework` trusted `X-Forwarded-For` from anyone and would bypass D21 |
 
 ---
@@ -102,7 +106,7 @@ All met: FastAPI + PostgreSQL + OpenAI-compatible LLM + Docker; Basic auth with 
 
 - Optional: batch / whole-table classification endpoint (fewer LLM calls, shared context).
 - D21/D22 are not in the contract suite (a lockout test would block later tests; the host check needs a system-DB target). TLS is covered by integration tests only (contract runs against `demo-db` with `prefer`).
-- Open from the gap review: token revocation is per token (no "revoke all" on password change); metrics / request IDs / JSON logs; migrations run on every container start.
+- Open from the gap review: token revocation is per token (no "revoke all" on password change); migrations run on every container start; no tracing (OpenTelemetry) beyond request IDs.
 
 ### 5a. External Checklist Review
 
@@ -116,9 +120,9 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - Contract: `docker compose --profile contract run --rm contract-tests` (real deployment + LLM).
 - Java: `docker compose --profile test run --build --rm tests mvn -B test` in `LLM_based_java/`.
 
-**Totals (measured 2026-11-08):** Python 262 (unit 218, integration 37, e2e 7; 97% cov) · contract 40 · Java 215 (unit 175, integration 40). Counts include parametrized cases.
+**Totals (measured 2026-11-08):** Python 282 (unit 237, integration 37, e2e 8; 97% cov) · contract 42 · Java 225 (unit 182, integration 43). Counts include parametrized cases.
 
-### Python unit (218)
+### Python unit (237)
 
 | File | # | Covers |
 |---|---|---|
@@ -126,16 +130,17 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 | `test_checksum_evidence.py` | 55 | TCKN, Luhn, email, IP checks; evidence tiers; fusion cases |
 | `test_classification_cache.py` | 10 | Key stability and invalidation; keyed fingerprint |
 | `test_classification_parser.py` | 18 | Normalization, rejection, all-zero handling |
-| `test_config.py` | 16 | Startup validation (incl. SSL mode, missing CA file): clear messages, all errors at once, example secrets OK in dev, rejected in production |
-| `test_llm_client.py` | 16 | Request shape, retries, quota fail-fast, parse re-request |
+| `test_config.py` | 17 | Startup validation (incl. SSL mode, missing CA file, log format): clear messages, all errors at once, example secrets OK in dev, rejected in production |
+| `test_llm_client.py` | 17 | Request shape, retries, quota fail-fast, parse re-request, call metrics |
 | `test_prompts.py` | 5 | Categories, sample delimiting, masking note, prompt injection stays in the data block |
 | `test_sample_sanitizer.py` | 13 | none / partial / strict masking |
 | `test_security.py` | 15 | AES-GCM, JWT (unique `jti`, missing / malformed `jti`), Argon2id |
 | `test_target_database.py` | 13 | Identifier quoting, sample query, `inet`, password repr, SSL option per mode |
+| `test_observability.py` | 17 | Request ID generated / reused / replaced, on 401/413/500; route-template labels (versioned vs alias, `/ui/*`, `unmatched`); `/metrics` text and token; JSON and text log lines |
 | `test_rate_limit.py` | 9 | Window, Retry-After, expiry, case-insensitive user, no cross-IP lockout, per-IP limit, success reset, 0 disables, bounded keys |
 | `test_host_policy.py` | 21 | System DB (name, alias, IP, even if listed), metadata/link-local/multicast/unspecified/reserved/IPv4-mapped, mixed DNS answers, loopback, allow list, unknown host |
 
-### Python integration (37) and e2e (7)
+### Python integration (37) and e2e (8)
 
 | File | # | Covers |
 |---|---|---|
@@ -145,13 +150,13 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 | `test_token_revocation.py` | 2 | Revoke idempotent, expired rows purged |
 | `test_target_tls.py` | 7 | prefer/require encrypted, disable plain, verify-full OK and wrong-name rejected, verify-ca by IP, untrusted CA rejected |
 | `test_classification_flow.py` | 14 | Masked prompts, evidence, limits, empty column, cache behavior |
-| `test_full_flow.py` | 7 | Full HTTP flow, Basic auth, aliases, unreachable target (fresh login limiter per test), logout revokes only that token, readiness |
+| `test_full_flow.py` | 8 | Metrics after a classification (connections, LLM, cache miss/hit); full HTTP flow, Basic auth, aliases, unreachable target (fresh login limiter per test), logout revokes only that token, readiness |
 
-### Contract (40)
+### Contract (42)
 
-`tests/contract/test_api_contract.py`: auth, logout, readiness, extraction, list/detail, classify (shape, validation, TCKN/email/IP evidence, cache), delete semantics. Passes against both services.
+`tests/contract/test_api_contract.py`: auth, logout, readiness, request ID, metrics, extraction, list/detail, classify (shape, validation, TCKN/email/IP evidence, cache), delete semantics. Passes against both services.
 
-### Java unit (175) and integration (40)
+### Java unit (182) and integration (43)
 
 | File | # | Covers |
 |---|---|---|
@@ -159,12 +164,13 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 | `LlmClientTest` | 15 | Same cases as Python |
 | `ClassificationServiceTest` | 7 | Mockito: cache miss/hit, `force_refresh`, TTL 0, limits before DB access, unknown column, evidence over a "no category" reply |
 | `SecurityTest` / `TargetDatabaseTest` | 10 / 7 | Crypto, JWT `jti` (hand-signed tokens for raw types); identifiers and sampling |
+| `ObservabilityTest` | 7 | Request ID rules, JSON line fields/types, level names, zero-registered labels |
 | `LoginAttemptLimiterTest` / `TargetHostPolicyTest` | 9 / 22 | Same cases as Python (D21, D22); IPv6 bracketing for JDBC |
 | `ClassificationCacheTest` | 3 | Key behavior |
 | `MetadataIntegrationTest` | 8 | Extraction, CRUD, pagination, schema filter; last snapshot delete removes the connection |
 | `ClassificationIntegrationTest` | 13 | Classification flow and cache |
 | `TargetAccessIntegrationTest` | 3 | Read-only enforcement; system DB refused as a target |
-| `ApiFlowIntegrationTest` | 9 | Full HTTP flow; 429 + Retry-After on `/auth` and Basic; logout; readiness |
+| `ApiFlowIntegrationTest` | 12 | Full HTTP flow; 429 + Retry-After on `/auth` and Basic; logout; readiness; request ID header; route labels incl. 401s; `/metrics` |
 | `TargetTlsIntegrationTest` | 7 | Same cases as Python `test_target_tls.py` |
 
 ### Evaluation (real LLM)
@@ -195,6 +201,7 @@ All areas ✅: scope, architecture, API, schema, classification flow, security (
 - **Step 34 (D21, D22, Python):** Gap review fixes. Login throttling (`core/rate_limit.py`) on `/auth` and Basic auth; `AppError` can carry headers. Target host policy (`infrastructure/database/host_policy.py`) in `connect_target`. New settings in `.env.example`, README (config, errors `400`/`429`, security, limitations). README migration list fixed (`0001`–`0003`). Docker suite 235 passed (97% cov), contract 37/37 against the running service, ruff and mypy clean. Live check: `system-db`, `169.254.169.254`, `localhost` → 400, `demo-db` → 201; 6th wrong login → 429 with `Retry-After: 300`. Java not changed.
 - **Step 35 (D21–D23, Java + CI):** CI runs `mypy app`. Java port of the limiter (`auth/LoginAttemptLimiter`, synchronized) and host policy (`discovery/TargetHostPolicy`, JDBC gets the checked addresses); 429 written by `TokenAuthenticationFilter` for Basic; forwarded headers trusted only from loopback (D23). Java 202 passed, contract 37/37 on Java, live check same as Python (400 for system-db / metadata / localhost, 429 on 6th wrong login, spoofed `X-Forwarded-For` still 429 on both). Java README, `.env.example`, MIGRATION_REPORT §10.1 updated.
 - **Step 36 (D24–D26, both services):** Merged Steps 34–35 into `main`. Target TLS modes, `/health/ready`, token revocation with `/auth/logout` (UI "Sign out" calls it). Compose demo/test DBs run `ssl=on` with a dev certificate. Port defects found by tests: jjwt coerced a numeric/empty `jti`; Java readiness hung for 30 s on a stopped system DB (now 503 in 3.0 s). Python 262 passed (97% cov), Java 215 passed, contract 40/40 on both; live: readiness 503 with system DB stopped and 200 after restart on both, `demo-db` `SHOW ssl` = on, Alembic at `0004`.
+- **Step 37 (D27–D29, both services):** Merged Step 36. Request IDs, `LOG_FORMAT=json`, Prometheus `/metrics` with LLM / cache / login / target-DB counters; `prometheus-client==0.25.0`, Micrometer Prometheus registry (Boot BOM). Fixed during the step: FastAPI's nested routers dropped the `/api/v1` prefix from route labels; Spring 401s had no route; Micrometer hid unused labels. Python 282 passed (97% cov), Java 225 passed, contract 42/42 on both. Live: `X-Request-ID` echoed and in the access line; JSON lines identical in shape on both (uvicorn / Spring startup lines included).
 
 ---
 

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.llmdiscovery.common.AppMetrics;
 import com.llmdiscovery.discovery.MetadataDtos.DbConnectionRequest;
 import java.util.Base64;
 import java.util.Map;
@@ -183,5 +184,59 @@ class ApiFlowIntegrationTest extends IntegrationTest {
         assertThat(ready.status()).isEqualTo(200);
         assertThat(ready.body().get("status").asText()).isEqualTo("ok");
         assertThat(ready.body().get("checks").get("system_db").asText()).isEqualTo("ok");
+    }
+
+    record Raw(int status, HttpHeaders headers, String body) {}
+
+    Raw raw(String path, String requestId) {
+        var spec = http.get().uri(path);
+        if (requestId != null) {
+            spec = spec.header("X-Request-ID", requestId);
+        }
+        return spec.exchange((req, res) -> new Raw(res.getStatusCode().value(), res.getHeaders(),
+                new String(res.getBody().readAllBytes())));
+    }
+
+    @Test
+    void everyResponseCarriesARequestId() {
+        assertThat(raw("/health", null).headers().getFirst("X-Request-ID")).matches("[0-9a-f]{32}");
+        assertThat(raw("/health", "trace-42").headers().getFirst("X-Request-ID")).isEqualTo("trace-42");
+        assertThat(raw("/health", "not allowed!").headers().getFirst("X-Request-ID")).matches("[0-9a-f]{32}");
+        Raw unauthorized = raw("/api/v1/metadata", "req-401");
+        assertThat(unauthorized.status()).isEqualTo(401);
+        assertThat(unauthorized.headers().getFirst("X-Request-ID")).isEqualTo("req-401");
+    }
+
+    double requests(String route, String status) {
+        var counter = AppMetrics.REGISTRY.find("http.requests")
+                .tags("method", "GET", "route", route, "status", status).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    @Test
+    void requestsAreCountedByRouteTemplateIncluding401s() {
+        double template = requests("/api/v1/metadata/{metadata_id}", "401");
+        double alias = requests("/metadata", "401");
+        double unmatched = requests("unmatched", "404");
+        double ui = requests("/ui/*", "200");
+        raw("/api/v1/metadata/00000000-0000-0000-0000-000000000000", null);
+        raw("/api/v1/metadata/11111111-1111-1111-1111-111111111111", null);
+        raw("/metadata", null);
+        raw("/no/such/path", null);
+        raw("/ui/app.js", null);
+        assertThat(requests("/api/v1/metadata/{metadata_id}", "401")).isEqualTo(template + 2);
+        assertThat(requests("/metadata", "401")).isEqualTo(alias + 1);
+        assertThat(requests("unmatched", "404")).isEqualTo(unmatched + 1);
+        assertThat(requests("/ui/*", "200")).isEqualTo(ui + 1);
+    }
+
+    @Test
+    void metricsEndpointServesPrometheusText() {
+        raw("/health", null);
+        Raw metrics = raw("/metrics", null);
+        assertThat(metrics.status()).isEqualTo(200);
+        assertThat(metrics.headers().getContentType().toString()).startsWith("text/plain");
+        assertThat(metrics.body()).contains("http_requests_total{method=\"GET\",route=\"/health\",status=\"200\"}")
+                .contains("http_request_duration_seconds_bucket").contains("# TYPE llm_requests_total counter");
     }
 }
