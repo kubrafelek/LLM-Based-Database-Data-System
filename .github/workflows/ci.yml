@@ -17,6 +17,10 @@ jobs:
           pip install ruff==0.6.9
           ruff check .
           ruff format --check .
+      - name: Type check
+        run: |
+          pip install -r requirements-dev.txt
+          mypy app
       - name: Tests (unit, integration, e2e) with coverage
         run: |
           cp .env.example .env
